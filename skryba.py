@@ -135,6 +135,25 @@ def model_display_name(path: Path) -> str:
     return path.name.removeprefix("ggml-").removesuffix(".bin")
 
 
+def default_language() -> str:
+    """Pick the default transcription language from the system locale."""
+    raw = ""
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            raw = value
+            break
+
+    base = raw.split("_", 1)[0].split(".", 1)[0].split("@", 1)[0].lower()
+    if not base or base in {"c", "posix"}:
+        return "auto"
+
+    code = base[:2]
+    if code in {lang for lang, _label in LANGUAGES}:
+        return code
+    return "auto"
+
+
 def discover_models() -> list[Path]:
     """Find models in every search path; first match wins on duplicates."""
     seen: set[str] = set()
@@ -227,7 +246,10 @@ class SkrybaWindow(Adw.ApplicationWindow):
         for _code, label in LANGUAGES:
             lang_strings.append(label)
         self.lang_row.set_model(lang_strings)
-        self.lang_row.set_selected(0)
+        lang_default = default_language()
+        self.lang_row.set_selected(
+            [code for code, _label in LANGUAGES].index(lang_default)
+        )
         group.add(self.lang_row)
 
         self.translate_row = Adw.SwitchRow(

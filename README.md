@@ -172,7 +172,8 @@ command.
 
 1. **Choose…** an audio or video file
 2. Pick a **Model** (`large-v3-turbo` is selected automatically if present)
-3. Pick the source **Language** (defaults to Polish)
+3. Pick the source **Language** (defaults to your system locale when Skryba
+   supports it, otherwise auto-detect)
 4. Optionally toggle **Translate to English** to get an English translation
    instead of a transcript in the source language
 5. Click **Transcribe**. The progress bar first tracks ffmpeg decoding, then
