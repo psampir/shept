@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skryba"
+version = "0.1.0"
+description = "Local speech-to-text for your desktop, powered by whisper.cpp"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Paweł Sampir", email = "pawel.sampir@gmail.com" },
+]
+keywords = ["whisper", "speech-to-text", "transcription", "gtk4", "libadwaita"]
+classifiers = [
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    # No "License :: OSI Approved :: MIT License" classifier: PEP 639 supersedes
+    # it with the SPDX `license` expression above, and setuptools >= 77 refuses
+    # to build if both are present.
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+# PyGObject (the `gi` module) is deliberately not declared as a runtime
+# dependency: it is provided by the system (python3-gobject / python-gi) and
+# installing it from PyPI requires a full GTK build toolchain. See the
+# Requirements section of the README.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/psampir/skryba"
+Issues = "https://github.com/psampir/skryba/issues"
+
+[project.scripts]
+skryba = "skryba:main"
+
+[tool.setuptools]
+py-modules = ["skryba"]
