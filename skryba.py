@@ -38,6 +38,71 @@ LINE_RE = re.compile(
     r"^\[(\d\d:\d\d:\d\d\.\d{3})\s*-->\s*(\d\d:\d\d:\d\d\.\d{3})\]\s+(.*)$"
 )
 
+# library name fragment -> human readable backend, best GPU backend first
+BACKEND_MARKERS = (
+    ("ggml-vulkan", "Vulkan"),
+    ("ggml-cuda", "CUDA"),
+    ("ggml-hip", "HIP"),
+    ("ggml-metal", "Metal"),
+    ("ggml-sycl", "SYCL"),
+    ("ggml-opencl", "OpenCL"),
+)
+
+
+def _linked_libraries(binary: str) -> list[str]:
+    """Return the ggml libraries `binary` is linked against."""
+    try:
+        ldd = subprocess.run(
+            ["ldd", binary],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if ldd.returncode == 0:
+            lines = [ln for ln in ldd.stdout.splitlines() if "ggml" in ln]
+            if lines:
+                return lines
+    except Exception:
+        pass
+    try:
+        ldconfig = subprocess.run(
+            ["ldconfig", "-p"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if ldconfig.returncode == 0:
+            return [
+                ln for ln in ldconfig.stdout.splitlines() if "libggml-" in ln
+            ]
+    except Exception:
+        pass
+    return []
+
+
+def detect_backend() -> str:
+    """Detect the whisper.cpp backend on this machine.
+
+    Returns one of "Vulkan", "CUDA", "HIP", "Metal", "SYCL", "OpenCL",
+    "CPU" (installed but no GPU backend), "not installed" or "unknown".
+    """
+    try:
+        binary = None
+        for name in ("whisper-cli", "whisper-cpp", "main"):
+            binary = shutil.which(name)
+            if binary is not None:
+                break
+        if binary is None:
+            return "not installed"
+
+        libs = _linked_libraries(binary)
+        for marker, label in BACKEND_MARKERS:
+            if any(marker in lib for lib in libs):
+                return label
+        return "CPU"
+    except Exception:
+        return "unknown"
+
 
 def discover_models() -> list[Path]:
     if not MODEL_DIR.is_dir():
@@ -158,8 +223,14 @@ class SkrybaWindow(Adw.ApplicationWindow):
 
         self.status = Gtk.Label(xalign=0)
         self.status.add_css_class("dim-label")
-        backend = "Vulkan (gfx1151)" if shutil.which("whisper-cli") else "missing"
-        self.status.set_text(f"whisper-cli backend: {backend}")
+        backend = detect_backend()
+        if backend == "not installed":
+            status_text = "whisper.cpp backend: whisper-cli not found in PATH"
+        elif backend == "CPU":
+            status_text = "whisper.cpp backend: CPU only"
+        else:
+            status_text = f"whisper.cpp backend: {backend}"
+        self.status.set_text(status_text)
         outer.append(self.status)
 
     def _on_choose_file(self, _btn: Gtk.Button) -> None:
@@ -270,7 +341,7 @@ class SkrybaWindow(Adw.ApplicationWindow):
             "whisper-cli",
             "-m", str(model),
             "-l", lang,
-            "-t", "8",
+            "-t", str(min(8, os.cpu_count() or 4)),
             "-f", str(wav_path),
         ]
         if translate:
