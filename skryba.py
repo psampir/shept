@@ -22,6 +22,27 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 APP_ID = "io.github.psampir.Skryba"
 MODEL_GLOB = "ggml-*.bin"
+MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
+README_URL = "https://github.com/psampir/skryba#install"
+
+REQUIRED_TOOLS = ("whisper-cli", "ffmpeg")
+
+_DISTRO_HINTS: dict[str, dict[str, str]] = {
+    "fedora": {
+        "whisper-cli": (
+            "sudo dnf install -y whisper-cpp ffmpeg python3-gobject gtk4 "
+            "libadwaita  (whisper-cpp: sudo dnf copr enable -y "
+            "sneed/whisper-cpp-vulkan)"
+        ),
+        "ffmpeg": "sudo dnf install -y ffmpeg",
+    },
+    "arch": {
+        "whisper-cli": (
+            "sudo pacman -S whisper-cpp ffmpeg python-gobject gtk4 libadwaita"
+        ),
+        "ffmpeg": "sudo pacman -S ffmpeg",
+    },
+}
 
 LANGUAGES = [
     ("pl", "Polish"),
@@ -55,6 +76,7 @@ def _linked_libraries(binary: str) -> list[str]:
         ldd = subprocess.run(
             ["ldd", binary],
             capture_output=True,
+            check=False,
             text=True,
             timeout=5,
         )
@@ -68,6 +90,7 @@ def _linked_libraries(binary: str) -> list[str]:
         ldconfig = subprocess.run(
             ["ldconfig", "-p"],
             capture_output=True,
+            check=False,
             text=True,
             timeout=5,
         )
@@ -135,6 +158,48 @@ def model_display_name(path: Path) -> str:
     return path.name.removeprefix("ggml-").removesuffix(".bin")
 
 
+def detect_distro() -> str:
+    """Classify the distribution as "fedora", "debian", "arch" or "other"."""
+    try:
+        text = Path("/etc/os-release").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return "other"
+
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        fields[key.strip()] = value.strip().strip("\"'")
+
+    ids = [fields.get("ID", ""), *fields.get("ID_LIKE", "").split()]
+    ids = [ident.lower() for ident in ids if ident]
+    families = {
+        "fedora": ("fedora", "rhel", "centos", "rocky", "almalinux"),
+        "debian": ("debian", "ubuntu"),
+        "arch": ("arch", "archlinux", "manjaro", "endeavouros"),
+    }
+    for family, names in families.items():
+        if any(ident in names for ident in ids):
+            return family
+    return "other"
+
+
+def install_hint(tool: str) -> str:
+    """Return an install hint for `tool` that fits this distribution."""
+    hint = _DISTRO_HINTS.get(detect_distro(), {}).get(tool)
+    if hint is not None:
+        return hint
+    if tool == "whisper-cli":
+        return (
+            "build whisper.cpp from source, see "
+            f"{README_URL}#debian--ubuntu"
+        )
+    return f"install {tool} with your package manager, see {README_URL}"
+
+
 def default_language() -> str:
     """Pick the default transcription language from the system locale."""
     raw = ""
@@ -180,6 +245,9 @@ class SkrybaWindow(Adw.ApplicationWindow):
         self._proc: subprocess.Popen[str] | None = None
         self._tmpdir: tempfile.TemporaryDirectory | None = None
         self._input_file: Path | None = None
+        self._missing_tools = [
+            name for name in REQUIRED_TOOLS if shutil.which(name) is None
+        ]
 
         toolbar = Adw.ToolbarView()
         self.set_content(toolbar)
@@ -205,6 +273,14 @@ class SkrybaWindow(Adw.ApplicationWindow):
         outer.set_margin_start(12)
         outer.set_margin_end(12)
         toolbar.set_content(outer)
+
+        if self._missing_tools:
+            names = " and ".join(self._missing_tools)
+            hint = install_hint(self._missing_tools[0])
+            banner = Adw.Banner(title=f"{names} not found — {hint}")
+            banner.set_tooltip_text(f"Missing: {names}")
+            banner.set_revealed(True)
+            outer.append(banner)
 
         clamp = Adw.Clamp(maximum_size=720)
         outer.append(clamp)
@@ -241,6 +317,9 @@ class SkrybaWindow(Adw.ApplicationWindow):
                 break
         group.add(self.model_row)
 
+        if not models:
+            controls.append(self._models_hint())
+
         self.lang_row = Adw.ComboRow(title="Language")
         lang_strings = Gtk.StringList()
         for _code, label in LANGUAGES:
@@ -262,9 +341,9 @@ class SkrybaWindow(Adw.ApplicationWindow):
         self.run_btn.add_css_class("suggested-action")
         self.run_btn.add_css_class("pill")
         self.run_btn.set_halign(Gtk.Align.CENTER)
-        self.run_btn.set_sensitive(False)
         self.run_btn.connect("clicked", self._on_run)
         controls.append(self.run_btn)
+        self._update_run_state()
 
         self.progress = Gtk.ProgressBar()
         self.progress.set_show_text(True)
@@ -297,6 +376,44 @@ class SkrybaWindow(Adw.ApplicationWindow):
         self.status.set_text(status_text)
         outer.append(self.status)
 
+    def _models_hint(self) -> Gtk.Widget:
+        """Explain where models were searched and how to get one."""
+        searched = "\n".join(f"  {path}" for path in model_search_paths())
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        label = Gtk.Label(
+            label=(
+                "No Whisper model found. Searched:\n"
+                f"{searched}\n"
+                "Recommended: large-v3-turbo (~1.5 GB)."
+            ),
+            xalign=0,
+        )
+        label.set_wrap(True)
+        label.add_css_class("dim-label")
+        box.append(label)
+        link = Gtk.LinkButton.new_with_label(MODELS_URL, "Get models")
+        link.set_halign(Gtk.Align.START)
+        box.append(link)
+        return box
+
+    def _transcribe_blocker(self) -> str:
+        """Return why Transcribe is unavailable, or "" when it is available."""
+        if self._missing_tools:
+            names = " and ".join(self._missing_tools)
+            return f"Missing {names} — {install_hint(self._missing_tools[0])}"
+        if not self._models:
+            return "No Whisper model found — see the hint below the model row."
+        if self._input_file is None:
+            return "Choose an audio file first."
+        return ""
+
+    def _update_run_state(self) -> None:
+        blocker = self._transcribe_blocker()
+        self.run_btn.set_sensitive(not blocker)
+        self.run_btn.set_tooltip_text(
+            blocker or "Transcribe the selected audio file."
+        )
+
     def _on_choose_file(self, _btn: Gtk.Button) -> None:
         dialog = Gtk.FileDialog(title="Select audio file")
         audio_filter = Gtk.FileFilter()
@@ -325,7 +442,7 @@ class SkrybaWindow(Adw.ApplicationWindow):
         path = Path(f.get_path())
         self._input_file = path
         self.file_row.set_subtitle(str(path))
-        self.run_btn.set_sensitive(bool(self._models))
+        self._update_run_state()
 
     def _selected_model(self) -> Path | None:
         if not self._models:
@@ -466,7 +583,7 @@ class SkrybaWindow(Adw.ApplicationWindow):
 
     def _finish(self, ok: bool, msg: str) -> bool:
         self.progress.set_visible(False)
-        self.run_btn.set_sensitive(True)
+        self._update_run_state()
         has_text = self.buffer.get_char_count() > 0
         self.copy_btn.set_sensitive(has_text)
         self.save_btn.set_sensitive(has_text)
@@ -513,12 +630,8 @@ class SkrybaApp(Adw.Application):
 
 
 def main() -> int:
-    if shutil.which("whisper-cli") is None:
-        print("whisper-cli not found in PATH", file=sys.stderr)
-        return 1
-    if shutil.which("ffmpeg") is None:
-        print("ffmpeg not found in PATH", file=sys.stderr)
-        return 1
+    # Missing tools and models are reported in the window instead of aborting
+    # here: a desktop-menu launch has nowhere to show a stderr message.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     return SkrybaApp().run(sys.argv)
 

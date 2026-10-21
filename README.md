@@ -229,15 +229,17 @@ progress bar. The temporary WAV is removed when the run finishes or fails.
 ## Troubleshooting
 
 **"whisper-cli not found in PATH"** — install it (see [Install](#install)) and
-make sure `which whisper-cli` returns a path.
+make sure `which whisper-cli` returns a path. Skryba shows the missing tool in a
+banner at the top of the window together with the install command for your
+distribution, and keeps **Transcribe** disabled until it is available.
 
 **"ffmpeg not found in PATH"** — install `ffmpeg` with your distribution's
-package manager.
+package manager; the same banner explains how.
 
 **Model dropdown shows "(no models found)"** — no `ggml-*.bin` file was found in
-any of the directories listed under [Models](#models). Filenames must start
-with `ggml-` and end with `.bin`. Set `SKRYBA_MODEL_DIR` if your models live
-elsewhere.
+any of the directories listed under [Models](#models); the window lists the
+paths it searched. Filenames must start with `ggml-` and end with `.bin`. Set
+`SKRYBA_MODEL_DIR` if your models live elsewhere.
 
 **No GPU acceleration / very slow** — see *Checking GPU acceleration* above.
 On Debian/Ubuntu, double-check that you built with `-DGGML_VULKAN=1` and that
