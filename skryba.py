@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal GTK4 + libadwaita wrapper around whisper-cli (Vulkan)."""
+"""Skryba — a GTK4 + libadwaita frontend for whisper-cli."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 
-APP_ID = "ink.psampir.WhisperGui"
+APP_ID = "io.github.psampir.Skryba"
 MODEL_DIR = Path.home() / ".local/share/whisper-cpp/models"
 
 LANGUAGES = [
@@ -45,9 +45,9 @@ def discover_models() -> list[Path]:
     return sorted(MODEL_DIR.glob("ggml-*.bin"))
 
 
-class WhisperWindow(Adw.ApplicationWindow):
+class SkrybaWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
-        super().__init__(application=app, title="Whisper GUI")
+        super().__init__(application=app, title="Skryba")
         self.set_default_size(820, 640)
 
         self._proc: subprocess.Popen[str] | None = None
@@ -228,7 +228,7 @@ class WhisperWindow(Adw.ApplicationWindow):
         lang: str,
         translate: bool,
     ) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory(prefix="whisper-gui-")
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="skryba-")
         wav_path = Path(self._tmpdir.name) / "input.wav"
 
         input_duration = self._probe_duration(input_path)
@@ -368,12 +368,12 @@ class WhisperWindow(Adw.ApplicationWindow):
         self.status.set_text(f"Saved: {f.get_path()}")
 
 
-class WhisperApp(Adw.Application):
+class SkrybaApp(Adw.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID)
 
     def do_activate(self) -> None:
-        win = self.get_active_window() or WhisperWindow(self)
+        win = self.get_active_window() or SkrybaWindow(self)
         win.present()
 
 
@@ -385,7 +385,7 @@ def main() -> int:
         print("ffmpeg not found in PATH", file=sys.stderr)
         return 1
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-    return WhisperApp().run(sys.argv)
+    return SkrybaApp().run(sys.argv)
 
 
 if __name__ == "__main__":
