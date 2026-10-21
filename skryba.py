@@ -21,7 +21,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 
 APP_ID = "io.github.psampir.Skryba"
-MODEL_DIR = Path.home() / ".local/share/whisper-cpp/models"
+MODEL_GLOB = "ggml-*.bin"
 
 LANGUAGES = [
     ("pl", "Polish"),
@@ -104,10 +104,53 @@ def detect_backend() -> str:
         return "unknown"
 
 
+def model_search_paths() -> list[Path]:
+    """Directories searched for models, highest priority first."""
+    data_home = os.environ.get("XDG_DATA_HOME", "")
+    data_dir = Path(data_home) if data_home else Path.home() / ".local" / "share"
+    override = os.environ.get("SKRYBA_MODEL_DIR", "")
+
+    wanted: list[Path] = []
+    if override:
+        wanted.append(Path(override).expanduser())
+    wanted.extend(
+        [
+            data_dir / "skryba" / "models",
+            data_dir / "whisper-cpp" / "models",
+            Path.home() / ".cache" / "whisper.cpp" / "models",
+            Path("/usr/share/whisper-cpp/models"),
+            Path("/usr/local/share/whisper-cpp/models"),
+        ]
+    )
+
+    paths: list[Path] = []
+    for path in wanted:
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
+def model_display_name(path: Path) -> str:
+    """Turn `ggml-large-v3-turbo.bin` into `large-v3-turbo`."""
+    return path.name.removeprefix("ggml-").removesuffix(".bin")
+
+
 def discover_models() -> list[Path]:
-    if not MODEL_DIR.is_dir():
-        return []
-    return sorted(MODEL_DIR.glob("ggml-*.bin"))
+    """Find models in every search path; first match wins on duplicates."""
+    seen: set[str] = set()
+    models: list[Path] = []
+    for directory in model_search_paths():
+        try:
+            candidates = sorted(directory.glob(MODEL_GLOB))
+        except OSError:
+            continue
+        for candidate in candidates:
+            name = model_display_name(candidate)
+            if name in seen:
+                continue
+            seen.add(name)
+            models.append(candidate)
+    return sorted(models, key=model_display_name)
 
 
 class SkrybaWindow(Adw.ApplicationWindow):
@@ -168,14 +211,13 @@ class SkrybaWindow(Adw.ApplicationWindow):
         model_strings = Gtk.StringList()
         if models:
             for m in models:
-                model_strings.append(m.name.removeprefix("ggml-").removesuffix(".bin"))
+                model_strings.append(model_display_name(m))
         else:
             model_strings.append("(no models found)")
         self.model_row.set_model(model_strings)
         self._models = models
         for i, m in enumerate(models):
-            stem = m.stem
-            if stem.endswith("large-v3-turbo"):
+            if model_display_name(m) == "large-v3-turbo":
                 self.model_row.set_selected(i)
                 break
         group.add(self.model_row)

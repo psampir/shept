@@ -117,9 +117,18 @@ picked up — check that `vulkaninfo` reports your GPU and rebuild with
 
 ## Models
 
-Models are **not bundled** with Skryba. Download one (or more) into
-`~/.local/share/whisper-cpp/models/`; the GUI auto-discovers every
-`ggml-*.bin` file found there.
+Models are **not bundled** with Skryba. Drop one (or more) `ggml-*.bin` files
+into any of the directories Skryba searches, in this order:
+
+1. `$SKRYBA_MODEL_DIR` — set this to keep models somewhere else entirely
+2. `$XDG_DATA_HOME/skryba/models` (`~/.local/share/skryba/models`)
+3. `$XDG_DATA_HOME/whisper-cpp/models` — whisper.cpp's own convention
+4. `~/.cache/whisper.cpp/models` — older upstream default
+5. `/usr/share/whisper-cpp/models`
+6. `/usr/local/share/whisper-cpp/models`
+
+Every `ggml-*.bin` file found in those directories shows up in the model
+dropdown; if the same model exists in several places, the first directory wins.
 
 Recommended: **`large-v3-turbo`** (~1.5 GB, f16) — the best accuracy/speed
 balance for most languages, including non-English ones.
@@ -224,9 +233,10 @@ make sure `which whisper-cli` returns a path.
 **"ffmpeg not found in PATH"** — install `ffmpeg` with your distribution's
 package manager.
 
-**Model dropdown shows "(no models found)"** — download a model into
-`~/.local/share/whisper-cpp/models/`. Filenames must start with `ggml-` and end
-with `.bin`.
+**Model dropdown shows "(no models found)"** — no `ggml-*.bin` file was found in
+any of the directories listed under [Models](#models). Filenames must start
+with `ggml-` and end with `.bin`. Set `SKRYBA_MODEL_DIR` if your models live
+elsewhere.
 
 **No GPU acceleration / very slow** — see *Checking GPU acceleration* above.
 On Debian/Ubuntu, double-check that you built with `-DGGML_VULKAN=1` and that
