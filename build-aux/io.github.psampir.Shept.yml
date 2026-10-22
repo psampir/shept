@@ -66,6 +66,10 @@ modules:
       - --disable-debug
       # No nasm/yasm in the SDK. Decode speed does not matter at this scale.
       - --disable-x86asm
+      # The SDK ships nv-codec-headers newer than ffmpeg 8.1 expects
+      # (NV_ENC_CLOCK_TIMESTAMP_SET lost `countingType`), and we only decode
+      # audio, so the whole NVIDIA encode/decode stack is dead weight.
+      - --disable-ffnvcodec
       - --prefix=/app
     cleanup:
       - /share/ffmpeg/examples
