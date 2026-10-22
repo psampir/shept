@@ -57,7 +57,12 @@ from shept.transcribe import (  # noqa: E402
     ms_to_ts,
     parse_progress_line,
     parse_segment,
+    stop_process,
 )
+
+#: How long the close handler waits for the worker to unwind after the child
+#: was stopped, so its temporary directory is removed before the process exits.
+WORKER_JOIN_TIMEOUT = 2.0
 
 #: The extensions offered when adding files; the README lists the same set.
 MEDIA_EXTENSIONS = (
@@ -93,6 +98,12 @@ class SheptWindow(Adw.ApplicationWindow):
         #: whisper-cli of the job being transcribed. Cancel terminates it.
         self._proc: subprocess.Popen[str] | None = None
         self._cancel = threading.Event()
+        #: True once close-request ran. From then on the idle callbacks stay
+        #: away from the widgets, which are already being torn down.
+        self._closing = False
+        #: The worker of the running job, joined on close so that its
+        #: `TemporaryDirectory` is removed before the process exits.
+        self._worker: threading.Thread | None = None
         self.queue = Queue()
         self._selected: Job | None = None
         #: The job whose segments the text view is currently showing. Segments
@@ -407,6 +418,48 @@ class SheptWindow(Adw.ApplicationWindow):
             not running and any(job.is_finished for job in self.queue.jobs)
         )
 
+    # --------------------------------------------------------------- lifecycle
+
+    def do_close_request(self) -> bool:
+        """Stop the running child before the window and the app go away.
+
+        Returning False lets the close continue. Without this the worker
+        thread — a daemon — dies with the interpreter while whisper-cli or
+        ffmpeg keeps running as an orphan, still loading the GPU. The waits
+        here are bounded so closing stays responsive.
+        """
+        self._closing = True
+        self._cancel_batch()
+        worker = self._worker
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=WORKER_JOIN_TIMEOUT)
+            # The worker removes the job's temporary directory on the way out,
+            # which is the same cleanup a normal finish does.
+        return False
+
+    def _cancel_batch(self) -> None:
+        """Stop the running job — the Cancel button and close-request share this.
+
+        Marking the batch cancelled and stopping the child live in one place so
+        closing the window mid-run cannot behave differently from pressing
+        Cancel.
+        """
+        if not self.queue.is_running:
+            return
+        self._cancel.set()
+        self.cancel_btn.set_sensitive(False)
+        self.status.set_text("Cancelling…")
+        stop_process(self._proc)
+
+    def _idle(self, callback: Callable[..., bool], *args: object) -> None:
+        """Queue a main-loop callback unless the window is closing.
+
+        Every callback a worker thread would otherwise post goes through here,
+        so a worker that outlives the window cannot touch destroyed widgets.
+        """
+        if not self._closing:
+            GLib.idle_add(callback, *args)
+
     # ------------------------------------------------------------------ queue
 
     def _job_for(self, path: Path) -> Job | None:
@@ -600,12 +653,13 @@ class SheptWindow(Adw.ApplicationWindow):
         self.progress.set_text("Decoding audio…")
         self.status.set_text(f"Extracting audio from {job.display_name} with ffmpeg…")
         self._update_run_state()
-        threading.Thread(
+        self._worker = threading.Thread(
             target=self._job_worker,
             args=(job, model, self._run_lang),
             name=f"shept-{job.display_name}",
             daemon=True,
-        ).start()
+        )
+        self._worker.start()
 
     def _finish_batch(self) -> None:
         """Return the window to its idle state and summarise the batch."""
@@ -629,14 +683,7 @@ class SheptWindow(Adw.ApplicationWindow):
 
     def _on_cancel_clicked(self, _btn: Gtk.Button) -> None:
         """Abandon the running job and leave the rest of the queue pending."""
-        if not self.queue.is_running:
-            return
-        self._cancel.set()
-        self.cancel_btn.set_sensitive(False)
-        self.status.set_text("Cancelling…")
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            proc.terminate()
+        self._cancel_batch()
 
     def _job_worker(self, job: Job, model: Path, lang: str) -> None:
         """Decode and transcribe one job, then report back on the main loop.
@@ -660,10 +707,14 @@ class SheptWindow(Adw.ApplicationWindow):
         except Exception as exc:  # a bad file must not stop the batch
             error = str(exc) or exc.__class__.__name__
         finally:
-            GLib.idle_add(self._job_finished, job, error, cancelled)
+            # `_idle` drops the callback when the window is already closing;
+            # the temporary directory above is gone either way.
+            self._idle(self._job_finished, job, error, cancelled)
 
     def _decode(self, job: Job, wav_path: Path) -> None:
         """Decode one job's input to 16 kHz mono WAV with ffmpeg."""
+        if self._cancel.is_set():
+            raise _Cancelled
         duration = self._probe_duration(job.path)
         proc = subprocess.Popen(
             build_ffmpeg_cmd(job.path, wav_path),
@@ -677,13 +728,13 @@ class SheptWindow(Adw.ApplicationWindow):
             assert proc.stdout is not None
             for line in proc.stdout:
                 if self._cancel.is_set():
-                    proc.terminate()
+                    stop_process(proc)
                     break
                 secs = parse_progress_line(line)
                 if secs is None or duration <= 0:
                     continue
                 frac = max(0.0, min(1.0, secs / duration))
-                GLib.idle_add(self._job_progress, job, frac, "Decoding audio…")
+                self._idle(self._job_progress, job, frac, "Decoding audio…")
         finally:
             ret = proc.wait()
             self._proc = None
@@ -695,10 +746,10 @@ class SheptWindow(Adw.ApplicationWindow):
 
     def _transcribe(self, job: Job, model: Path, wav_path: Path, lang: str) -> None:
         """Run whisper-cli on the decoded WAV, streaming its segments."""
-        GLib.idle_add(self._job_progress, job, 0.0, "Loading model…")
-        GLib.idle_add(
-            self.status.set_text, f"Running whisper-cli on {job.display_name}…"
-        )
+        if self._cancel.is_set():
+            raise _Cancelled
+        self._idle(self._job_progress, job, 0.0, "Loading model…")
+        self._idle(self.status.set_text, f"Running whisper-cli on {job.display_name}…")
         duration = self._probe_duration(wav_path)
         proc = subprocess.Popen(
             build_whisper_cmd(
@@ -717,7 +768,7 @@ class SheptWindow(Adw.ApplicationWindow):
             assert proc.stdout is not None
             for line in proc.stdout:
                 if self._cancel.is_set():
-                    proc.terminate()
+                    stop_process(proc)
                     break
                 self._handle_line(job, line.rstrip("\n"), duration)
         finally:
@@ -752,13 +803,15 @@ class SheptWindow(Adw.ApplicationWindow):
         segment = parse_segment(line)
         if segment is None:
             return
-        GLib.idle_add(self._job_segment, job, segment)
+        self._idle(self._job_segment, job, segment)
         if duration > 0:
             frac = max(0.0, min(1.0, (segment.end_ms / 1000.0) / duration))
-            GLib.idle_add(self._job_progress, job, frac, ms_to_ts(segment.end_ms))
+            self._idle(self._job_progress, job, frac, ms_to_ts(segment.end_ms))
 
     def _job_segment(self, job: Job, segment: Segment) -> bool:
         """Keep one segment for the exporters and show it when it is on screen."""
+        if self._closing:
+            return False
         job.segments.append(segment)
         if self._buffer_job is job:
             end = self.buffer.get_end_iter()
@@ -766,6 +819,8 @@ class SheptWindow(Adw.ApplicationWindow):
         return False
 
     def _job_progress(self, job: Job, frac: float, label: str) -> bool:
+        if self._closing:
+            return False
         job.progress = frac
         row = self._rows.get(job)
         if row is not None:
@@ -777,6 +832,10 @@ class SheptWindow(Adw.ApplicationWindow):
     def _job_finished(self, job: Job, error: str | None, cancelled: bool) -> bool:
         """Record one job's outcome, then start the next one — failures included."""
         self._proc = None
+        self._worker = None
+        if self._closing:
+            # The window is going away: there is no batch left to wind down.
+            return False
         if cancelled:
             self.queue.mark_cancelled(job)
         elif error:

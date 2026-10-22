@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,13 @@ from pathlib import Path
 LINE_RE = re.compile(
     r"^\[(\d\d:\d\d:\d\d\.\d{3})\s*-->\s*(\d\d:\d\d:\d\d\.\d{3})\]\s+(.*)$"
 )
+
+#: How long `stop_process` gives a child to honour SIGTERM before SIGKILL.
+STOP_TIMEOUT = 2.0
+
+#: After SIGKILL the child is gone almost immediately; this only bounds the
+#: wait so a stuck kernel state cannot hang the UI thread.
+KILL_TIMEOUT = 1.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +75,35 @@ def build_whisper_cmd(
         str(wav_path),
     ]
     return cmd
+
+
+def stop_process(
+    proc: subprocess.Popen | None,
+    timeout: float = STOP_TIMEOUT,
+) -> None:
+    """Stop `proc`: SIGTERM, then SIGKILL when it is still alive after `timeout`.
+
+    Used by both Cancel and the window's close handler. Closing the window
+    while a job runs used to leave whisper-cli (or ffmpeg) behind as an orphan
+    still using the GPU; a cancelled job stopped its process only from the
+    worker thread, which is a daemon and dies with the interpreter. Waiting
+    here is bounded, so a close can never hang the main loop for long.
+
+    A process that already exited, or no process at all, is a no-op.
+    """
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    proc.kill()
+    try:
+        proc.wait(timeout=KILL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def parse_progress_line(line: str) -> float | None:

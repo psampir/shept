@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import signal
+import subprocess
+import sys
+import time
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -22,6 +26,7 @@ from shept.transcribe import (
     ms_to_ts,
     parse_progress_line,
     parse_segment,
+    stop_process,
     ts_to_ms,
     ts_to_seconds,
 )
@@ -376,3 +381,64 @@ def test_build_whisper_cmd_keeps_paths_with_spaces_intact():
 
     assert cmd[cmd.index("-m") + 1] == str(model)
     assert cmd[cmd.index("-f") + 1] == str(wav_path)
+
+
+# ------------------------------------------------------------- process control
+
+
+def test_stop_process_terminates_a_running_child():
+    proc = subprocess.Popen(["sleep", "30"])
+
+    stop_process(proc)
+
+    assert proc.poll() is not None
+
+
+def _spawn_term_ignoring_child() -> subprocess.Popen:
+    """A child that ignores SIGTERM and says so once the handler is installed."""
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal, sys, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "sys.stdout.write('ready'); sys.stdout.flush(); "
+            "time.sleep(30)",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stdout.read(5) == "ready"
+    return proc
+
+
+def test_stop_process_kills_a_child_that_ignores_sigterm():
+    proc = _spawn_term_ignoring_child()
+
+    stop_process(proc, timeout=0.2)
+
+    assert proc.poll() is not None
+    assert proc.returncode == -signal.SIGKILL
+
+
+def test_stop_process_is_a_no_op_for_a_finished_child():
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+
+    stop_process(proc)
+
+    assert proc.returncode == 0
+
+
+def test_stop_process_accepts_none():
+    stop_process(None)
+
+
+def test_stop_process_does_not_wait_long_when_the_child_ignores_sigterm():
+    proc = _spawn_term_ignoring_child()
+    start = time.monotonic()
+
+    stop_process(proc, timeout=0.2)
+
+    assert time.monotonic() - start < 5
