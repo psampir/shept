@@ -1,4 +1,4 @@
-<p align="center"><img src="data/logo.svg" width="112" alt="Shept logo"></p>
+<p align="left"><img src="data/logo.svg" width="112" alt="Shept logo"></p>
 
 # Shept
 
