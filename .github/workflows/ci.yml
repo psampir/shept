@@ -66,3 +66,27 @@ jobs:
         with:
           name: shept-wheel
           path: dist/*.whl
+
+  flatpak:
+    name: Flatpak bundle
+    # The bundle is what most users install, so the manifest has to be exercised
+    # on every change that can affect it — but a cold build of whisper.cpp and
+    # ffmpeg is ~20 min, so pull requests to dev are left to the fast jobs.
+    if: github.event_name == 'push' || github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: shept.flatpak
+          manifest-path: build-aux/io.github.psampir.Shept.yml
+          cache-key: flatpak-${{ hashFiles('build-aux/io.github.psampir.Shept.yml') }}
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: shept-flatpak
+          path: shept.flatpak
+          if-no-files-found: error
