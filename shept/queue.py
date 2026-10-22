@@ -53,6 +53,8 @@ class Job:
     state: JobState = JobState.PENDING
     segments: list[Segment] = field(default_factory=list)
     error: str | None = None
+    #: Full diagnostics for the row tooltip when `error` is the short version.
+    error_details: str | None = None
     progress: float = 0.0
 
     @property
@@ -127,6 +129,7 @@ class Queue:
         job.state = JobState.RUNNING
         job.segments.clear()
         job.error = None
+        job.error_details = None
         job.progress = 0.0
         return job
 
@@ -139,10 +142,20 @@ class Queue:
             job.segments[:] = list(segments)
         return job
 
-    def mark_failed(self, job: Job, error: str) -> Job:
-        """Finish `job` with a message; its partial segments are kept."""
+    def mark_failed(
+        self,
+        job: Job,
+        error: str,
+        details: str | None = None,
+    ) -> Job:
+        """Finish `job` with a message; its partial segments are kept.
+
+        `error` is the short reason a row's subtitle shows; `details` keeps the
+        full child output, which belongs in the tooltip.
+        """
         job.state = JobState.FAILED
         job.error = error
+        job.error_details = details or None
         return job
 
     def mark_cancelled(self, job: Job) -> Job:

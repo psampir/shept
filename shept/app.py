@@ -65,6 +65,8 @@ from shept.settings import Settings  # noqa: E402
 from shept.transcribe import (  # noqa: E402
     EXPORT_LABELS,
     EXPORTERS,
+    ChildFailure,
+    DiagnosticTail,
     Segment,
     build_ffmpeg_cmd,
     build_whisper_cmd,
@@ -975,6 +977,7 @@ class SheptWindow(Adw.ApplicationWindow):
         what keeps the batch strictly sequential.
         """
         error: str | None = None
+        details: str | None = None
         cancelled = False
         try:
             with tempfile.TemporaryDirectory(prefix="shept-") as tmp:
@@ -987,10 +990,11 @@ class SheptWindow(Adw.ApplicationWindow):
             cancelled = True
         except Exception as exc:  # a bad file must not stop the batch
             error = str(exc) or exc.__class__.__name__
+            details = getattr(exc, "details", None) or None
         finally:
             # `_idle` drops the callback when the window is already closing;
             # the temporary directory above is gone either way.
-            self._idle(self._job_finished, job, error, cancelled)
+            self._idle(self._job_finished, job, error, cancelled, details)
 
     def _decode(self, job: Job, wav_path: Path) -> None:
         """Decode one job's input to 16 kHz mono WAV with ffmpeg."""
@@ -1060,20 +1064,26 @@ class SheptWindow(Adw.ApplicationWindow):
             bufsize=1,
         )
         self._proc = proc
+        tail = DiagnosticTail()
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
                 if self._cancel.is_set():
                     stop_process(proc)
                     break
-                self._handle_line(job, line.rstrip("\n"), duration)
+                if not self._handle_line(job, line.rstrip("\n"), duration):
+                    tail.add(line)
         finally:
             ret = proc.wait()
             self._proc = None
         if self._cancel.is_set():
             raise _Cancelled
         if ret != 0:
-            raise RuntimeError(f"whisper-cli exited with {ret}")
+            message = f"whisper-cli exited with {ret}"
+            summary = tail.summary(3)
+            if summary:
+                message += f": {summary}"
+            raise ChildFailure(message, "\n".join(tail.lines))
 
     def _probe_duration(self, media: Path) -> float:
         """Bounded, cancellable duration probe (the logic lives in transcribe)."""
@@ -1083,14 +1093,21 @@ class SheptWindow(Adw.ApplicationWindow):
         """Publish the running child so Cancel and close can stop it."""
         self._proc = proc
 
-    def _handle_line(self, job: Job, line: str, duration: float) -> None:
+    def _handle_line(self, job: Job, line: str, duration: float) -> bool:
+        """Handle one whisper-cli line; True when it was a transcript segment.
+
+        Everything that is not a segment — banners, model loading, errors — is
+        the caller's business: it feeds the diagnostic tail, which is the only
+        clue left when whisper-cli exits non-zero.
+        """
         segment = parse_segment(line)
         if segment is None:
-            return
+            return False
         self._idle(self._job_segment, job, segment)
         if duration > 0:
             frac = max(0.0, min(1.0, (segment.end_ms / 1000.0) / duration))
             self._idle(self._job_progress, job, frac, ms_to_ts(segment.end_ms))
+        return True
 
     def _job_segment(self, job: Job, segment: Segment) -> bool:
         """Keep one segment for the exporters and show it when it is on screen."""
@@ -1113,7 +1130,13 @@ class SheptWindow(Adw.ApplicationWindow):
         self.progress.set_text(f"{label}  ({int(frac * 100)}%)")
         return False
 
-    def _job_finished(self, job: Job, error: str | None, cancelled: bool) -> bool:
+    def _job_finished(
+        self,
+        job: Job,
+        error: str | None,
+        cancelled: bool,
+        details: str | None = None,
+    ) -> bool:
         """Record one job's outcome, then start the next one — failures included."""
         self._proc = None
         self._worker = None
@@ -1123,7 +1146,7 @@ class SheptWindow(Adw.ApplicationWindow):
         if cancelled:
             self.queue.mark_cancelled(job)
         elif error:
-            self.queue.mark_failed(job, error)
+            self.queue.mark_failed(job, error, details)
         else:
             self.queue.mark_done(job)
         row = self._rows.get(job)
@@ -1264,8 +1287,9 @@ class JobRow(Adw.ActionRow):
         # The subtitle is capped to a couple of lines; the tooltip keeps the
         # whole message so a failure stays diagnosable.
         tooltip = str(job.path)
-        if job.state is JobState.FAILED and job.error:
-            tooltip = f"{tooltip}\n\n{job.error}"
+        details = job.error_details or job.error
+        if job.state is JobState.FAILED and details:
+            tooltip = f"{tooltip}\n\n{details}"
         self.set_tooltip_text(tooltip)
         running = job.state is JobState.RUNNING
         self.progress.set_visible(running)

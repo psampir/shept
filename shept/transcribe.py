@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,50 @@ class Segment:
     start_ms: int
     end_ms: int
     text: str
+
+
+class ChildFailure(RuntimeError):
+    """A child process failed; `details` keeps the output a row cannot show.
+
+    `str(exc)` is the short message a queue row's subtitle has room for, while
+    `details` carries the full diagnostics for its tooltip.
+    """
+
+    def __init__(self, message: str, details: str = "") -> None:
+        super().__init__(message)
+        self.details = details
+
+
+#: How many non-segment output lines are kept to explain a failed run.
+DIAGNOSTIC_LINES = 20
+
+
+class DiagnosticTail:
+    """Bounded ring buffer of a child's non-segment output lines.
+
+    whisper-cli writes its progress and its real diagnostics to one stream, and
+    a corrupt model, an out-of-memory kill or a bad `-vm` path all end in the
+    same bare non-zero exit. Remembering the last few lines is what turns
+    "whisper-cli exited with 1" into something the user can act on.
+    """
+
+    def __init__(self, max_lines: int = DIAGNOSTIC_LINES) -> None:
+        self._lines: deque[str] = deque(maxlen=max_lines)
+
+    def add(self, line: str) -> None:
+        """Remember one output line unless it is blank."""
+        text = line.strip()
+        if text:
+            self._lines.append(text)
+
+    def summary(self, lines: int = 3) -> str:
+        """The last `lines` remembered lines, oldest first, newline-joined."""
+        return "\n".join(list(self._lines)[-lines:])
+
+    @property
+    def lines(self) -> list[str]:
+        """Every remembered line, oldest first."""
+        return list(self._lines)
 
 
 def build_ffmpeg_cmd(input_path: Path, wav_path: Path) -> list[str]:

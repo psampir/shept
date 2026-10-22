@@ -174,8 +174,18 @@ def test_mark_failed_records_message_and_keeps_partial_segments(media):
 
     assert job.state is JobState.FAILED
     assert job.error == "whisper-cli exited with 3"
+    assert job.error_details is None
     assert job.segments == [SEGMENTS[0]]
     assert job.is_finished
+
+
+def test_mark_failed_keeps_the_full_details_for_the_tooltip(media):
+    job = Job(path=media("a.mp3"))
+
+    Queue().mark_failed(job, "whisper-cli exited with 1", "error: bad model")
+
+    assert job.error == "whisper-cli exited with 1"
+    assert job.error_details == "error: bad model"
 
 
 def test_mark_cancelled_leaves_remaining_jobs_pending(media):

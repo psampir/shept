@@ -16,6 +16,8 @@ import pytest
 from shept.transcribe import (
     EXPORT_LABELS,
     EXPORTERS,
+    ChildFailure,
+    DiagnosticTail,
     Segment,
     build_ffmpeg_cmd,
     build_whisper_cmd,
@@ -479,6 +481,47 @@ def test_probe_duration_registers_and_releases_the_child(tmp_path):
     assert len(seen) == 2
     assert isinstance(seen[0], subprocess.Popen)
     assert seen[1] is None
+
+
+# ----------------------------------------------------------- diagnostics tail
+
+
+def test_diagnostic_tail_keeps_only_the_last_lines():
+    tail = DiagnosticTail(max_lines=3)
+
+    for line in ("one", "two", "three", "four"):
+        tail.add(line)
+
+    assert tail.lines == ["two", "three", "four"]
+
+
+def test_diagnostic_tail_ignores_blank_lines():
+    tail = DiagnosticTail()
+
+    tail.add("first")
+    tail.add("   \n")
+    tail.add("second")
+
+    assert tail.lines == ["first", "second"]
+
+
+def test_diagnostic_tail_summary_is_the_last_three_lines():
+    tail = DiagnosticTail()
+    for line in ("a", "b", "c", "d"):
+        tail.add(line)
+
+    assert tail.summary(3) == "b\nc\nd"
+
+
+def test_diagnostic_tail_summary_of_nothing_is_empty():
+    assert DiagnosticTail().summary() == ""
+
+
+def test_child_failure_keeps_the_full_details():
+    failure = ChildFailure("whisper-cli exited with 1", "error: failed to load model")
+
+    assert str(failure) == "whisper-cli exited with 1"
+    assert failure.details == "error: failed to load model"
 
 
 # -------------------------------------------------------------- error summaries
