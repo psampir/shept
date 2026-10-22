@@ -238,6 +238,29 @@ def test_best_translation_model_falls_back_to_uncatalogued_models(tmp_path):
     )
 
 
+# ---------------------------------------------------------- path abbreviation
+
+
+def test_abbreviate_home_inside_home(fake_home):
+    path = fake_home / ".local" / "share" / "shept" / "models"
+
+    assert environment.abbreviate_home(path) == "~/.local/share/shept/models"
+
+
+def test_abbreviate_home_is_exactly_home(fake_home):
+    assert environment.abbreviate_home(fake_home) == "~"
+
+
+def test_abbreviate_home_outside_home(fake_home):
+    outside = Path("/opt/models")
+
+    assert environment.abbreviate_home(outside) == "/opt/models"
+
+
+def test_abbreviate_home_root(fake_home):
+    assert environment.abbreviate_home(Path("/")) == "/"
+
+
 # ------------------------------------------------------------ model discovery
 
 

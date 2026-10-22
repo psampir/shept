@@ -29,6 +29,7 @@ from shept.environment import (  # noqa: E402
     LANGUAGES,
     MODELS_URL,
     REQUIRED_TOOLS,
+    abbreviate_home,
     best_translation_model,
     default_language,
     detect_backend,
@@ -165,11 +166,17 @@ class SheptWindow(Adw.ApplicationWindow):
             banner.set_revealed(True)
             outer.append(banner)
 
+        # Everything below the banner shares one clamp, so the controls, the
+        # transcript and the status line have the same width and the same
+        # horizontal alignment instead of being centred in different widths.
         clamp = Adw.Clamp(maximum_size=720)
         outer.append(clamp)
 
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        clamp.set_child(content)
+
         controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        clamp.set_child(controls)
+        content.append(controls)
 
         queue_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         queue_title = Gtk.Label(label="Queue", xalign=0)
@@ -298,7 +305,7 @@ class SheptWindow(Adw.ApplicationWindow):
 
         scroller = Gtk.ScrolledWindow(vexpand=True)
         scroller.set_min_content_height(280)
-        outer.append(scroller)
+        content.append(scroller)
 
         self.buffer = Gtk.TextBuffer()
         self.text_view = Gtk.TextView(buffer=self.buffer)
@@ -320,7 +327,7 @@ class SheptWindow(Adw.ApplicationWindow):
         else:
             status_text = f"whisper.cpp backend: {backend}"
         self.status.set_text(status_text)
-        outer.append(self.status)
+        content.append(self.status)
 
         self._reload_models()
 
@@ -1083,7 +1090,7 @@ class ModelDownloadDialog(Adw.Window):
 
         self._group = Adw.PreferencesGroup(
             title="Available models",
-            description=f"Downloads are saved to {self._dest}",
+            description=f"Downloads are saved to {abbreviate_home(self._dest)}",
         )
         clamp.set_child(self._group)
 
@@ -1309,5 +1316,8 @@ def main() -> int:
     # Missing tools and models are reported in the window instead of aborting
     # here: a desktop-menu launch has nowhere to show a stderr message.
     GLib.set_application_name("Shept")
+    # Without a program name secondary windows are filed under "python3" by
+    # the compositor and the taskbar.
+    GLib.set_prgname(APP_ID)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     return SheptApp().run(sys.argv)

@@ -192,6 +192,25 @@ def best_translation_model(installed: Iterable[Path]) -> Path | None:
     return None
 
 
+def abbreviate_home(path: Path) -> str:
+    """Return `path` with the home directory written as `~`.
+
+    Paths outside the home directory are returned unchanged, so the result is
+    always a usable absolute path and never leaks what the home directory
+    happens to be called.
+    """
+    path = Path(path)
+    try:
+        home = Path.home()
+        relative = path.relative_to(home)
+    except (RuntimeError, ValueError):
+        # No home directory at all, or a path outside it.
+        return str(path)
+    if relative == Path("."):
+        return "~"
+    return f"~/{relative}"
+
+
 def detect_distro(path: Path = Path("/etc/os-release")) -> str:
     """Classify the distribution as "fedora", "debian", "arch" or "other"."""
     try:
