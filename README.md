@@ -193,17 +193,18 @@ Type=Application
 Name=Shept
 GenericName=Audio Transcription
 Comment=Local audio transcription with whisper.cpp
-Exec=shept
-Icon=audio-input-microphone
+Exec=shept %U
+Icon=io.github.psampir.Shept
 Terminal=false
 Categories=AudioVideo;Utility;
 Keywords=transcribe;transcription;whisper;speech;audio;text;
 StartupNotify=true
 StartupWMClass=io.github.psampir.Shept
+MimeType=audio/mpeg;audio/x-wav;audio/mp4;audio/ogg;audio/opus;audio/flac;audio/x-flac;audio/aac;video/mp4;video/webm;video/x-matroska;video/quicktime;video/x-msvideo;video/x-ms-wmv;video/mp2t;video/x-m4v;video/3gpp;
 ```
 
-`Exec=shept` assumes the package is installed; when running from a source
-checkout without installing, use `Exec=python3 -m shept` instead (and set
+`Exec=shept %U` assumes the package is installed; when running from a source
+checkout without installing, use `Exec=python3 -m shept %U` instead (and set
 `Path=` to the checkout directory).
 
 Then refresh the launcher cache (most desktops do this automatically):
