@@ -14,10 +14,11 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shept.environment import LANGUAGES, default_language
+from shept.environment import default_language
+from shept.languages import AUTO, LANGUAGES
 
-#: Language codes Shept knows how to pass to whisper-cli.
-LANGUAGE_CODES = frozenset(code for code, _label in LANGUAGES)
+#: Language codes Shept knows how to pass to whisper-cli, plus `auto`.
+LANGUAGE_CODES = frozenset({AUTO.code, *(language.code for language in LANGUAGES)})
 
 
 @dataclass

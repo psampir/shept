@@ -10,6 +10,15 @@ and this project adheres to
 
 ### Added
 
+- **Every language whisper.cpp knows**: the source language list is no
+  longer eight hand-picked entries but all 100 languages and dialects
+  whisper.cpp v1.8.4 supports, taken from the `g_lang` table in
+  `src/whisper.cpp` at the pinned tag instead of a copy that can drift. That
+  includes `yue` (Cantonese), `haw` (Hawaiian) and every other three-letter
+  code, and locale detection now recognises them too. Languages can be matched
+  fuzzily by name or code — `ukr` finds Ukrainian, `jpn` finds Japanese — with
+  results ranked so a prefix beats a word-start match and scattered letters
+  come last.
 - **Skip silence**: a switch under Language drives whisper.cpp's Silero VAD
   stage (`--vad -vm`), so silent stretches are dropped before they reach the
   model and the invented "thank you for watching" that whisper likes to put

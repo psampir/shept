@@ -11,6 +11,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+# `languages` is deliberately dependency-free, so importing it here does not
+# create a cycle: nothing in that module knows about the environment.
+from shept.languages import language_by_code
+
 MODEL_GLOB = "ggml-*.bin"
 #: whisper.cpp's VAD model is also a `ggml-*.bin` file, so it is matched
 #: separately and kept out of the transcription model list.
@@ -37,17 +41,6 @@ _DISTRO_HINTS: dict[str, dict[str, str]] = {
         "ffmpeg": "sudo pacman -S ffmpeg",
     },
 }
-
-LANGUAGES = [
-    ("pl", "Polish"),
-    ("en", "English"),
-    ("de", "German"),
-    ("fr", "French"),
-    ("es", "Spanish"),
-    ("uk", "Ukrainian"),
-    ("ru", "Russian"),
-    ("auto", "Auto-detect"),
-]
 
 # library name fragment -> human readable backend, best GPU backend first
 BACKEND_MARKERS = (
@@ -238,9 +231,12 @@ def default_language() -> str:
     if not base or base in {"c", "posix"}:
         return "auto"
 
-    code = base[:2]
-    if code in {lang for lang, _label in LANGUAGES}:
-        return code
+    # Most locales name a 2-letter language, but whisper also has 3-letter
+    # codes (haw, yue), so try the whole base first and then its first two
+    # letters — "haw_US" must not degrade to Hausa ("ha").
+    for candidate in (base, base[:2]):
+        if language_by_code(candidate) is not None:
+            return candidate
     return "auto"
 
 

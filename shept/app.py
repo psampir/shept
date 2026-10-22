@@ -26,7 +26,6 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from shept import APP_ID, settings  # noqa: E402
 from shept.environment import (  # noqa: E402
-    LANGUAGES,
     MODELS_URL,
     REQUIRED_TOOLS,
     abbreviate_home,
@@ -40,6 +39,7 @@ from shept.environment import (  # noqa: E402
     model_search_paths,
     vad_model_for,
 )
+from shept.languages import LANGUAGES  # noqa: E402
 from shept.models import (  # noqa: E402
     CATALOG,
     VAD_SPEC,
@@ -263,12 +263,12 @@ class SheptWindow(Adw.ApplicationWindow):
 
         self.lang_row = Adw.ComboRow(title="Language")
         lang_strings = Gtk.StringList()
-        for _code, label in LANGUAGES:
-            lang_strings.append(label)
+        for language in LANGUAGES:
+            lang_strings.append(language.name)
         self.lang_row.set_model(lang_strings)
         lang_default = default_language()
         self.lang_row.set_selected(
-            [code for code, _label in LANGUAGES].index(lang_default)
+            [language.code for language in LANGUAGES].index(lang_default)
         )
         group.add(self.lang_row)
 
@@ -365,7 +365,7 @@ class SheptWindow(Adw.ApplicationWindow):
         if stored.model is not None:
             self._reload_models(select=stored.model)
 
-        codes = [code for code, _label in LANGUAGES]
+        codes = [language.code for language in LANGUAGES]
         if stored.language in codes:
             self.lang_row.set_selected(codes.index(stored.language))
 
@@ -720,7 +720,7 @@ class SheptWindow(Adw.ApplicationWindow):
         index = self.lang_row.get_selected()
         if not 0 <= index < len(LANGUAGES):
             return "auto"
-        return LANGUAGES[index][0]
+        return LANGUAGES[index].code
 
     # ---------------------------------------------------------------- silence
 
