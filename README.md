@@ -28,6 +28,9 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
 - Transcribe locally with a Whisper model of your choice, one file after
   another, so a batch can run unattended
 - Download models from inside the app, with progress and cancellation
+- Skip silence with whisper.cpp's Silero VAD, so silent stretches never reach
+  the model and are not hallucinated into text
+- Remember the model, language and silence choice between runs
 - Streams output as it transcribes, with a per-file progress bar and a summary
   when the batch ends
 - Copy or save the selected file's transcript, or export every finished file
@@ -140,6 +143,9 @@ into any of the directories Shept searches, in this order:
 
 Every `ggml-*.bin` file found in those directories shows up in the model
 dropdown; if the same model exists in several places, the first directory wins.
+The one exception is `ggml-silero-*.bin`, the voice-activity asset behind
+[Skipping silence](#skipping-silence): it is picked up from the same
+directories but never listed as a transcription model.
 
 ### Downloading from the app
 
@@ -211,7 +217,10 @@ command.
 2. Pick a **Model** (`large-v3-turbo` is selected automatically if present).
    Press **Manage…** to download one if the list is empty or you want another.
 3. Pick the source **Language** (defaults to your system locale when Shept
-   supports it, otherwise auto-detect)
+   supports it, otherwise auto-detect) and leave **Skip silence** on — it is
+   the default whenever the VAD asset is installed. See
+   [Skipping silence](#skipping-silence) for what it changes and how to fetch
+   the asset.
 4. Click **Transcribe all** — the button reads **Transcribe** when exactly one
    file is waiting. Files are processed one at a time: the active row shows
    `Transcribing…` with its own progress bar, the overall progress bar tracks
@@ -235,6 +244,60 @@ command.
      until you pick one), and skips files that produced no text.
 7. **Clear finished** removes completed, failed and cancelled rows from the
    queue without touching anything on disk.
+
+### Skipping silence
+
+Whisper does not like silence. Give it a clean recording with twenty quiet
+seconds at the end and it tends to invent something — "thank you for watching",
+"for more information, visit www.fema.org", a repeat of the last sentence.
+Those segments are pure fiction, and they end up in every export.
+
+Shept can drop silence before the model ever sees it, using whisper.cpp's
+Silero VAD stage (`--vad -vm`):
+
+- **Skip silence** sits under **Language** in the main window.
+- It starts **on** when the VAD asset is installed, and off otherwise.
+- Turning it on without the asset does not fail a run: the switch stays off and
+  an inline **Download** button appears. Pressing it fetches
+  `ggml-silero-v6.2.0.bin` (885 kB) from
+  [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) into
+  `$XDG_DATA_HOME/shept/models`, and the switch turns on when it lands. Shept
+  never touches the network on its own.
+- While the switch is on, every file in the batch is transcribed with
+  `--vad -vm <path>`.
+
+The asset is not a Whisper model, so it is deliberately absent from the model
+dropdown even though it lives in the same directories. Shept looks for the
+first `ggml-silero-*.bin` in the same places as the models (see
+[Models](#models)); to install it by hand:
+
+```bash
+mkdir -p ~/.local/share/shept/models
+curl -L -o ~/.local/share/shept/models/ggml-silero-v6.2.0.bin \
+    https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
+```
+
+VAD removes silent stretches from the audio that whisper analyses, so the
+speech that remains keeps its position in the file and the timestamps in the
+subtitle exports stay correct. It affects transcription only — the audio file
+itself is never modified. The VAD threshold and padding knobs whisper.cpp
+exposes are not in the interface; they are left at upstream's defaults.
+
+### Settings
+
+Shept remembers the selected **Model**, **Language** and **Skip silence**
+choice in:
+
+```
+$XDG_CONFIG_HOME/shept/settings.json     # ~/.config/shept/settings.json
+```
+
+Delete that file to return to the defaults: the model Shept picks on a fresh
+install, the language your locale implies, and Skip silence on only when the
+VAD asset is available. The file is written atomically — a crash while saving
+cannot leave a half-written one behind — and it is read defensively: a damaged
+file, unknown language code or wrongly typed value is ignored, and a model that
+has since been removed from disk silently gives way to the default selection.
 
 ### Translating a transcript
 
@@ -335,9 +398,12 @@ On Debian/Ubuntu, double-check that you built with `-DGGML_VULKAN=1` and that
 probably using a `.en` model. Pick a multilingual one (any model name without
 an `.en` suffix).
 
-**Random nonsense at the end of long files** — Whisper sometimes hallucinates
-during silence. Trim trailing silence with ffmpeg (`-af silenceremove`) or
-clean it up manually.
+**Random nonsense at the end of long files** — Whisper hallucinates during
+silence, so a recording with a long quiet tail often ends in invented text.
+Leave **Skip silence** on (see [Skipping silence](#skipping-silence)); if the
+VAD asset is missing, press **Download** in the hint under the switch. As a
+fallback you can trim silence with ffmpeg (`-af silenceremove`) before adding
+the file.
 
 ## Status
 

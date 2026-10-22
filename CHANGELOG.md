@@ -8,7 +8,29 @@ and this project adheres to
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Skip silence**: a switch under Language drives whisper.cpp's Silero VAD
+  stage (`--vad -vm`), so silent stretches are dropped before they reach the
+  model and the invented "thank you for watching" that whisper likes to put
+  over trailing silence does not appear. The switch is on by default when the
+  VAD asset is installed; without it, turning the switch on reveals a
+  **Download** button that fetches the 885 kB `ggml-silero-v6.2.0.bin` into
+  `$XDG_DATA_HOME/shept/models`. Nothing is downloaded until you press it, and
+  the asset never appears in the transcription model list.
+- The transcription model, language and Skip silence choice are remembered
+  between runs in `$XDG_CONFIG_HOME/shept/settings.json`
+  (`~/.config/shept/settings.json`). A missing, damaged or outdated file falls
+  back to defaults instead of stopping the app, and a model that is no longer
+  installed is replaced by the default selection.
+
+### Fixed
+
+- Closing the window while a file is being transcribed now stops `whisper-cli`
+  (or the `ffmpeg` decode) instead of leaving it running in the background
+  with the GPU still busy, and the job's temporary directory is removed.
+  Cancel and closing the window share one code path, so they behave the same,
+  and the worker thread no longer touches GTK widgets after the window is gone.
 
 ## [0.1.0] - 2026-10-22
 
