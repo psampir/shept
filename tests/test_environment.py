@@ -295,6 +295,35 @@ def test_install_hint_fallback_for_other_tools(monkeypatch):
     assert environment.README_URL in hint
 
 
+# ------------------------------------------------------------------ flatpak
+
+
+def test_is_flatpak_detects_marker(tmp_path):
+    marker = tmp_path / ".flatpak-info"
+
+    assert environment.is_flatpak(marker) is False
+
+    marker.write_text("[Application]\nname=io.github.psampir.Shept\n", encoding="utf-8")
+
+    assert environment.is_flatpak(marker) is True
+
+
+@pytest.mark.parametrize("tool", ["whisper-cli", "ffmpeg"])
+def test_install_hint_prefers_flatpak_message_over_distro(tmp_path, monkeypatch, tool):
+    marker = tmp_path / ".flatpak-info"
+    marker.write_text("[Application]\n", encoding="utf-8")
+    # install_hint() calls is_flatpak() with the real sandbox marker, so bind
+    # the check to the temporary marker instead of looking at /.
+    monkeypatch.setattr(environment, "is_flatpak", lambda: marker.exists())
+    monkeypatch.setattr(environment, "detect_distro", lambda: "fedora")
+
+    hint = environment.install_hint(tool)
+
+    assert "Flatpak" in hint
+    assert environment.ISSUES_URL in hint
+    assert "dnf" not in hint
+
+
 # -------------------------------------------------------------------- locale
 
 

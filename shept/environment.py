@@ -14,6 +14,7 @@ from pathlib import Path
 MODEL_GLOB = "ggml-*.bin"
 MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
 README_URL = "https://github.com/psampir/shept#install"
+ISSUES_URL = "https://github.com/psampir/shept/issues"
 
 REQUIRED_TOOLS = ("whisper-cli", "ffmpeg")
 
@@ -177,8 +178,23 @@ def detect_distro(path: Path = Path("/etc/os-release")) -> str:
     return "other"
 
 
+def is_flatpak(marker: Path = Path("/.flatpak-info")) -> bool:
+    """True when running inside a Flatpak sandbox.
+
+    Flatpak creates `/.flatpak-info` in the sandbox. The marker is a parameter
+    so the check can be tested without actually being inside a sandbox.
+    """
+    return marker.exists()
+
+
 def install_hint(tool: str) -> str:
     """Return an install hint for `tool` that fits this distribution."""
+    if is_flatpak():
+        # Distributions' package managers are not available in the sandbox:
+        # a missing tool means the Flatpak itself is broken.
+        return (
+            f"this Flatpak is missing a bundled tool — please report it at {ISSUES_URL}"
+        )
     hint = _DISTRO_HINTS.get(detect_distro(), {}).get(tool)
     if hint is not None:
         return hint
