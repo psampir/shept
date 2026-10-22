@@ -14,6 +14,7 @@ from pathlib import Path
 # `languages` is deliberately dependency-free, so importing it here does not
 # create a cycle: nothing in that module knows about the environment.
 from shept.languages import language_by_code
+from shept.models import is_complete_vad
 
 MODEL_GLOB = "ggml-*.bin"
 #: whisper.cpp's VAD model is also a `ggml-*.bin` file, so it is matched
@@ -268,16 +269,19 @@ def find_vad_model() -> Path | None:
     """Return the Silero VAD model whisper.cpp should load, or None.
 
     The same directories as the Whisper models are searched; the first
-    `ggml-silero-*.bin` found wins, so a file the user installed next to their
-    models is used before anything further down the list.
+    `ggml-silero-*.bin` of the expected size wins, so a file the user installed
+    next to their models is used before anything further down the list. A
+    truncated or corrupt file counts as missing rather than being offered as
+    `-vm`, which would only fail the next run.
     """
     for directory in model_search_paths():
         try:
             candidates = sorted(directory.glob(VAD_MODEL_GLOB))
         except OSError:
             continue
-        if candidates:
-            return candidates[0]
+        for candidate in candidates:
+            if is_complete_vad(candidate):
+                return candidate
     return None
 
 

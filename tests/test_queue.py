@@ -12,6 +12,7 @@ from shept.queue import (
     JobState,
     Queue,
     export_all,
+    exportable_jobs,
 )
 from shept.transcribe import Segment
 
@@ -126,6 +127,34 @@ def test_next_pending_skips_finished_jobs(media):
 
 def test_next_pending_on_empty_queue_is_none():
     assert Queue().next_pending() is None
+
+
+# ------------------------------------------------------------------ begin_next
+
+
+def test_begin_next_starts_the_oldest_pending_job(media):
+    queue = _queue_of(media("a.mp3"), media("b.mp3"))
+    first, second = queue.jobs
+
+    job = queue.begin_next(cancelled=False)
+
+    assert job is first
+    assert first.state is JobState.RUNNING
+    assert second.state is JobState.PENDING
+
+
+def test_begin_next_after_a_cancel_does_not_consume_the_next_job(media):
+    """A cancel between two jobs must leave the next one retryable."""
+    queue = _queue_of(media("a.mp3"))
+    pending = queue.jobs[0]
+
+    assert queue.begin_next(cancelled=True) is None
+    assert pending.state is JobState.PENDING
+    assert queue.next_pending() is pending
+
+
+def test_begin_next_on_empty_queue_is_none():
+    assert Queue().begin_next(cancelled=False) is None
 
 
 # ---------------------------------------------------------------- transitions
@@ -328,6 +357,52 @@ def test_export_all_skips_jobs_without_segments(media, tmp_path):
 
     assert export_all(queue.jobs, "srt", tmp_path) == []
     assert list(tmp_path.glob("*.srt")) == []
+
+
+def test_export_all_skips_failed_jobs_even_with_partial_segments(media, tmp_path):
+    """A partial transcript is not a result; "Export all" only writes DONE."""
+    queue = _queue_of(media("done.mp3"), media("failed.mp3"), media("stopped.mp3"))
+    done, failed, cancelled = queue.jobs
+    queue.mark_done(done, SEGMENTS)
+    failed.segments.extend(SEGMENTS)
+    queue.mark_failed(failed, "boom")
+    cancelled.segments.extend(SEGMENTS)
+    queue.mark_cancelled(cancelled)
+
+    written = export_all(queue.jobs, "txt", tmp_path)
+
+    assert [path.name for path in written] == ["done.txt"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["done.txt", "media"]
+
+
+def test_export_all_skips_the_running_job(media, tmp_path):
+    queue = _queue_of(media("running.mp3"), media("done.mp3"))
+    running, done = queue.jobs
+    queue.mark_running(running)
+    running.segments.extend(SEGMENTS)
+    queue.mark_done(done, SEGMENTS)
+
+    written = export_all(queue.jobs, "txt", tmp_path)
+
+    assert [path.name for path in written] == ["done.txt"]
+
+
+def test_exportable_jobs_is_done_with_text(media):
+    queue = _queue_of(
+        media("done.mp3"),
+        media("empty.mp3"),
+        media("failed.mp3"),
+        media("running.mp3"),
+    )
+    done, empty, failed, running = queue.jobs
+    queue.mark_done(done, SEGMENTS)
+    queue.mark_done(empty)
+    failed.segments.extend(SEGMENTS)
+    queue.mark_failed(failed, "boom")
+    queue.mark_running(running)
+    running.segments.extend(SEGMENTS)
+
+    assert exportable_jobs(queue.jobs) == [done]
 
 
 @pytest.mark.parametrize(

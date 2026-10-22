@@ -576,6 +576,10 @@ class SheptWindow(Adw.ApplicationWindow):
                 blocker or f"Transcribe {pending} files one after another."
             )
         self.cancel_btn.set_visible(running)
+        # Cancel is disabled while a cancel is in flight and enabled again here
+        # when the batch continues, so a cancel that does not end the batch
+        # cannot leave the button dead for the rest of the run.
+        self.cancel_btn.set_sensitive(running)
         self.clear_btn.set_sensitive(
             not running and any(job.is_finished for job in self.queue.jobs)
         )
@@ -895,6 +899,10 @@ class SheptWindow(Adw.ApplicationWindow):
             return False
         self._vad_model = path
         self._set_vad_state(VadState.INSTALLED)
+        # The switch is on now, so persist that: otherwise the skip_silence
+        # from the failed/missing state wins on the next launch and the switch
+        # silently reverts even though the asset is installed.
+        self._save_settings()
         self.status.set_text("Silero VAD downloaded — silence will be skipped.")
         return False
 
@@ -917,12 +925,14 @@ class SheptWindow(Adw.ApplicationWindow):
 
     def _start_next_job(self) -> None:
         """Run the oldest pending job, or wind the batch down when none is left."""
-        job = self.queue.next_pending()
         model = self._run_model
-        if job is None or model is None:
+        if model is None:
             self._finish_batch()
             return
-        self.queue.mark_running(job)
+        job = self.queue.begin_next(cancelled=self._cancel.is_set())
+        if job is None:
+            self._finish_batch()
+            return
         self._rows[job].refresh()
         self._select_job(job)
         self.progress.set_fraction(0.0)

@@ -122,6 +122,21 @@ class Queue:
                 return job
         return None
 
+    def begin_next(self, *, cancelled: bool) -> Job | None:
+        """Start the oldest pending job, or return None when the batch is over.
+
+        A cancel that lands between two jobs must not consume the next one:
+        marking it RUNNING and then abandoning the batch would leave it
+        unreachable — no retry, and `next_pending()` skips it from then on.
+        So the cancel flag is checked before anything is mutated.
+        """
+        if cancelled:
+            return None
+        job = self.next_pending()
+        if job is None:
+            return None
+        return self.mark_running(job)
+
     # ----------------------------------------------------------- transitions
 
     def mark_running(self, job: Job) -> Job:

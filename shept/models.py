@@ -265,6 +265,20 @@ def is_downloaded(spec: ModelSpec, dest_dir: Path) -> bool:
     return abs(size - spec.size_bytes) <= size_tolerance(spec.size_bytes)
 
 
+def is_complete_vad(path: Path) -> bool:
+    """True when `path` is a Silero VAD file of the expected size.
+
+    A truncated or otherwise damaged download counts as missing: handing its
+    path to whisper-cli as `-vm` fails the run with a message that never
+    mentions the asset, so the window would offer it again anyway.
+    """
+    try:
+        size = Path(path).stat().st_size
+    except OSError:
+        return False
+    return abs(size - VAD_SPEC.size_bytes) <= size_tolerance(VAD_SPEC.size_bytes)
+
+
 def size_tolerance(size_bytes: int) -> int:
     """Allowed size drift for a model file: 1% of its size, capped at 1 MiB."""
     return min(SIZE_TOLERANCE, max(1, size_bytes // 100))

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from shept import environment
+from shept.models import VAD_SPEC
 
 
 @pytest.fixture
@@ -39,6 +40,14 @@ def locale_env(monkeypatch):
 
 def _make_model(path: Path) -> Path:
     path.write_text("", encoding="utf-8")
+    return path
+
+
+def _make_vad(path: Path) -> Path:
+    """A Silero VAD file of the size the catalogue expects (sparse on disk)."""
+    path.write_bytes(b"")
+    with path.open("rb+") as handle:
+        handle.truncate(VAD_SPEC.size_bytes)
     return path
 
 
@@ -499,7 +508,7 @@ def test_find_vad_model_returns_none_when_absent(tmp_path, monkeypatch):
 def test_find_vad_model_finds_the_silero_asset(tmp_path, monkeypatch):
     models = tmp_path / "models"
     models.mkdir()
-    vad = _make_model(models / "ggml-silero-v6.2.0.bin")
+    vad = _make_vad(models / "ggml-silero-v6.2.0.bin")
     _make_model(models / "ggml-base.bin")
 
     monkeypatch.setattr(environment, "model_search_paths", lambda: [models])
@@ -512,7 +521,7 @@ def test_find_vad_model_searches_every_path(tmp_path, monkeypatch):
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    vad = _make_model(second / "ggml-silero-v5.1.2.bin")
+    vad = _make_vad(second / "ggml-silero-v5.1.2.bin")
 
     monkeypatch.setattr(environment, "model_search_paths", lambda: [first, second])
 
@@ -524,8 +533,8 @@ def test_find_vad_model_first_path_wins(tmp_path, monkeypatch):
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    preferred = _make_model(first / "ggml-silero-v6.2.0.bin")
-    _make_model(second / "ggml-silero-v6.2.0.bin")
+    preferred = _make_vad(first / "ggml-silero-v6.2.0.bin")
+    _make_vad(second / "ggml-silero-v6.2.0.bin")
 
     monkeypatch.setattr(environment, "model_search_paths", lambda: [first, second])
 
@@ -536,11 +545,35 @@ def test_find_vad_model_skips_missing_directories(tmp_path, monkeypatch):
     missing = tmp_path / "missing"
     models = tmp_path / "models"
     models.mkdir()
-    vad = _make_model(models / "ggml-silero-v6.2.0.bin")
+    vad = _make_vad(models / "ggml-silero-v6.2.0.bin")
 
     monkeypatch.setattr(environment, "model_search_paths", lambda: [missing, models])
 
     assert environment.find_vad_model() == vad
+
+
+def test_find_vad_model_treats_a_corrupt_asset_as_missing(tmp_path, monkeypatch):
+    """A truncated download must not be offered as `-vm`."""
+    models = tmp_path / "models"
+    models.mkdir()
+    _make_model(models / "ggml-silero-v6.2.0.bin")  # empty file
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [models])
+
+    assert environment.find_vad_model() is None
+
+
+def test_find_vad_model_skips_a_corrupt_asset_for_a_healthy_one(tmp_path, monkeypatch):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _make_model(first / "ggml-silero-v6.2.0.bin")
+    healthy = _make_vad(second / "ggml-silero-v6.2.0.bin")
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [first, second])
+
+    assert environment.find_vad_model() == healthy
 
 
 def test_discover_models_skips_the_silero_asset(tmp_path, monkeypatch):
