@@ -31,14 +31,18 @@ from shept.environment import (  # noqa: E402
     REQUIRED_TOOLS,
     abbreviate_home,
     default_language,
+    default_skip_silence,
     detect_backend,
     discover_models,
+    find_vad_model,
     install_hint,
     model_display_name,
     model_search_paths,
+    vad_model_for,
 )
 from shept.models import (  # noqa: E402
     CATALOG,
+    VAD_SPEC,
     DownloadCancelled,
     ModelSpec,
     download,
@@ -114,7 +118,11 @@ class SheptWindow(Adw.ApplicationWindow):
         #: dropdown mid-run does not split the batch across settings.
         self._run_model: Path | None = None
         self._run_lang = "auto"
+        self._run_vad: Path | None = None
         self._export_format = "txt"
+        #: Set while the switch is being moved from code, so the toggle handler
+        #: does not mistake a revert for a user choice.
+        self._suppress_vad = False
         self._missing_tools = [
             name for name in REQUIRED_TOOLS if shutil.which(name) is None
         ]
@@ -256,6 +264,32 @@ class SheptWindow(Adw.ApplicationWindow):
             [code for code, _label in LANGUAGES].index(lang_default)
         )
         group.add(self.lang_row)
+
+        # Skipping silence is whisper.cpp's Silero VAD stage. The switch is on
+        # by default only when that asset is installed: turning it on without
+        # it would make whisper-cli fail on a missing -vm file, so the hint
+        # below offers to download it instead.
+        self._vad_model = find_vad_model()
+        self.vad_row = Adw.SwitchRow(
+            title="Skip silence",
+            subtitle="Drop silent stretches so whisper cannot invent text over them",
+        )
+        self.vad_row.set_active(default_skip_silence(self._vad_model))
+        self.vad_row.connect("notify::active", self._on_vad_toggled)
+        group.add(self.vad_row)
+
+        self.vad_hint = Adw.ActionRow(
+            title="Silero VAD is not installed",
+            subtitle=(
+                f"Download it ({human_size(VAD_SPEC.size_bytes)}) to skip silence."
+            ),
+        )
+        self.vad_download_btn = Gtk.Button(label="Download")
+        self.vad_download_btn.set_valign(Gtk.Align.CENTER)
+        self.vad_download_btn.connect("clicked", self._on_vad_download)
+        self.vad_hint.add_suffix(self.vad_download_btn)
+        self.vad_hint.set_visible(False)
+        group.add(self.vad_hint)
 
         self.run_btn = Gtk.Button(label="Transcribe")
         self.run_btn.add_css_class("suggested-action")
@@ -623,6 +657,81 @@ class SheptWindow(Adw.ApplicationWindow):
     def _selected_lang(self) -> str:
         return LANGUAGES[self.lang_row.get_selected()][0]
 
+    # ---------------------------------------------------------------- silence
+
+    def _on_vad_toggled(self, row: Adw.SwitchRow, _pspec: object) -> None:
+        """Refuse to switch VAD on without its model, and point at the download."""
+        if self._suppress_vad:
+            return
+        if row.get_active() and self._vad_model is None:
+            self._suppress_vad = True
+            row.set_active(False)
+            self._suppress_vad = False
+            self.vad_hint.set_visible(True)
+            self.status.set_text(
+                "Silero VAD is not installed — press Download to fetch it."
+            )
+
+    def _on_vad_download(self, _btn: Gtk.Button) -> None:
+        """Fetch the Silero VAD asset — only when the user asks for it."""
+        if self._vad_model is not None:
+            return
+        self.vad_download_btn.set_sensitive(False)
+        self.vad_download_btn.set_label("Downloading…")
+        self.vad_hint.set_subtitle(
+            f"Downloading Silero VAD ({human_size(VAD_SPEC.size_bytes)})…"
+        )
+        threading.Thread(
+            target=self._vad_download_worker,
+            name="shept-vad-download",
+            daemon=True,
+        ).start()
+
+    def _vad_download_worker(self) -> None:
+        try:
+            path = download(
+                VAD_SPEC,
+                download_dir(),
+                progress=self._vad_download_progress,
+                is_cancelled=lambda: self._closing,
+            )
+        except Exception as exc:  # reported in the row, never crashes
+            message = str(exc) or exc.__class__.__name__
+            self._idle(self._vad_download_done, None, message)
+        else:
+            self._idle(self._vad_download_done, path, "")
+
+    def _vad_download_progress(self, received: int, total: int) -> None:
+        """Called from the download thread; hops back to the main loop."""
+        self._idle(self._vad_download_progress_ui, received, total)
+
+    def _vad_download_progress_ui(self, received: int, total: int) -> bool:
+        if self._closing:
+            return False
+        if total > 0:
+            percent = int(received * 100 / total)
+            self.vad_hint.set_subtitle(f"Downloading Silero VAD — {percent}%")
+        else:
+            self.vad_hint.set_subtitle(
+                f"Downloading Silero VAD — {human_size(received)}"
+            )
+        return False
+
+    def _vad_download_done(self, path: Path | None, error: str) -> bool:
+        if self._closing:
+            return False
+        self.vad_download_btn.set_label("Download")
+        self.vad_download_btn.set_sensitive(True)
+        if path is None:
+            self.vad_hint.set_subtitle(f"Download failed: {error}")
+            self.status.set_text(f"Silero VAD download failed: {error}")
+            return False
+        self._vad_model = path
+        self.vad_hint.set_visible(False)
+        self.vad_row.set_active(True)
+        self.status.set_text("Silero VAD downloaded — silence will be skipped.")
+        return False
+
     def _on_run(self, _btn: Gtk.Button) -> None:
         if self.queue.is_running or not self.queue.has_pending:
             return
@@ -631,6 +740,7 @@ class SheptWindow(Adw.ApplicationWindow):
             return
         self._run_model = model
         self._run_lang = self._selected_lang()
+        self._run_vad = vad_model_for(self.vad_row.get_active(), self._vad_model)
         self._cancel.clear()
         self.cancel_btn.set_sensitive(True)
         self.progress.set_visible(True)
@@ -655,7 +765,7 @@ class SheptWindow(Adw.ApplicationWindow):
         self._update_run_state()
         self._worker = threading.Thread(
             target=self._job_worker,
-            args=(job, model, self._run_lang),
+            args=(job, model, self._run_lang, self._run_vad),
             name=f"shept-{job.display_name}",
             daemon=True,
         )
@@ -664,6 +774,7 @@ class SheptWindow(Adw.ApplicationWindow):
     def _finish_batch(self) -> None:
         """Return the window to its idle state and summarise the batch."""
         self._run_model = None
+        self._run_vad = None
         self.progress.set_visible(False)
         self.progress.set_text("")
         self._update_run_state()
@@ -685,7 +796,13 @@ class SheptWindow(Adw.ApplicationWindow):
         """Abandon the running job and leave the rest of the queue pending."""
         self._cancel_batch()
 
-    def _job_worker(self, job: Job, model: Path, lang: str) -> None:
+    def _job_worker(
+        self,
+        job: Job,
+        model: Path,
+        lang: str,
+        vad_model: Path | None,
+    ) -> None:
         """Decode and transcribe one job, then report back on the main loop.
 
         Each job gets its own thread and exactly one `_job_finished` call, so a
@@ -701,7 +818,7 @@ class SheptWindow(Adw.ApplicationWindow):
                 self._decode(job, wav_path)
                 if self._cancel.is_set():
                     raise _Cancelled
-                self._transcribe(job, model, wav_path, lang)
+                self._transcribe(job, model, wav_path, lang, vad_model)
         except _Cancelled:
             cancelled = True
         except Exception as exc:  # a bad file must not stop the batch
@@ -744,7 +861,14 @@ class SheptWindow(Adw.ApplicationWindow):
             message = (proc.stderr.read() if proc.stderr else "") or "unknown error"
             raise RuntimeError(f"ffmpeg failed: {message.strip()}")
 
-    def _transcribe(self, job: Job, model: Path, wav_path: Path, lang: str) -> None:
+    def _transcribe(
+        self,
+        job: Job,
+        model: Path,
+        wav_path: Path,
+        lang: str,
+        vad_model: Path | None,
+    ) -> None:
         """Run whisper-cli on the decoded WAV, streaming its segments."""
         if self._cancel.is_set():
             raise _Cancelled
@@ -757,6 +881,7 @@ class SheptWindow(Adw.ApplicationWindow):
                 wav_path,
                 lang,
                 min(8, os.cpu_count() or 4),
+                vad_model,
             ),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

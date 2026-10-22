@@ -481,3 +481,90 @@ def test_detect_backend_unknown_on_unexpected_error(monkeypatch):
     monkeypatch.setattr(environment, "_linked_libraries", boom)
 
     assert environment.detect_backend() == "unknown"
+
+
+# -------------------------------------------------------------- VAD discovery
+
+
+def test_find_vad_model_returns_none_when_absent(tmp_path, monkeypatch):
+    models = tmp_path / "models"
+    models.mkdir()
+    _make_model(models / "ggml-base.bin")
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [models])
+
+    assert environment.find_vad_model() is None
+
+
+def test_find_vad_model_finds_the_silero_asset(tmp_path, monkeypatch):
+    models = tmp_path / "models"
+    models.mkdir()
+    vad = _make_model(models / "ggml-silero-v6.2.0.bin")
+    _make_model(models / "ggml-base.bin")
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [models])
+
+    assert environment.find_vad_model() == vad
+
+
+def test_find_vad_model_searches_every_path(tmp_path, monkeypatch):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    vad = _make_model(second / "ggml-silero-v5.1.2.bin")
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [first, second])
+
+    assert environment.find_vad_model() == vad
+
+
+def test_find_vad_model_first_path_wins(tmp_path, monkeypatch):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    preferred = _make_model(first / "ggml-silero-v6.2.0.bin")
+    _make_model(second / "ggml-silero-v6.2.0.bin")
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [first, second])
+
+    assert environment.find_vad_model() == preferred
+
+
+def test_find_vad_model_skips_missing_directories(tmp_path, monkeypatch):
+    missing = tmp_path / "missing"
+    models = tmp_path / "models"
+    models.mkdir()
+    vad = _make_model(models / "ggml-silero-v6.2.0.bin")
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [missing, models])
+
+    assert environment.find_vad_model() == vad
+
+
+def test_discover_models_skips_the_silero_asset(tmp_path, monkeypatch):
+    models = tmp_path / "models"
+    models.mkdir()
+    _make_model(models / "ggml-silero-v6.2.0.bin")
+    _make_model(models / "ggml-base.bin")
+
+    monkeypatch.setattr(environment, "model_search_paths", lambda: [models])
+
+    assert environment.discover_models() == [models / "ggml-base.bin"]
+
+
+def test_default_skip_silence_needs_the_model():
+    assert environment.default_skip_silence(Path("/m/ggml-silero-v6.2.0.bin")) is True
+    assert environment.default_skip_silence(None) is False
+
+
+@pytest.mark.parametrize(("enabled", "expected"), [(True, True), (False, False)])
+def test_vad_model_for_enabled_switch(enabled, expected):
+    vad = Path("/m/ggml-silero-v6.2.0.bin")
+
+    assert (environment.vad_model_for(enabled, vad) is not None) is expected
+
+
+def test_vad_model_for_without_asset_is_none():
+    assert environment.vad_model_for(True, None) is None

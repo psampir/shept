@@ -93,6 +93,19 @@ CATALOG: tuple[ModelSpec, ...] = (
     ),
 )
 
+#: The Silero voice-activity-detection model whisper.cpp loads for `--vad`.
+#: It is an auxiliary asset rather than a Whisper model, so it is deliberately
+#: kept out of `CATALOG`: it must never be offered as a transcription model or
+#: show up in the model dropdown. Upstream publishes it in a separate Hugging
+#: Face repository, hence the literal URL instead of `BASE_URL`.
+VAD_SPEC = ModelSpec(
+    name="silero-vad",
+    filename="ggml-silero-v6.2.0.bin",
+    size_bytes=885_098,
+    url="https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin",
+    note="voice-activity detection for skipping silence",
+)
+
 
 def human_size(size_bytes: int) -> str:
     """Format a byte count for the UI, using decimal units like HuggingFace."""

@@ -442,3 +442,27 @@ def test_stop_process_does_not_wait_long_when_the_child_ignores_sigterm():
     stop_process(proc, timeout=0.2)
 
     assert time.monotonic() - start < 5
+
+
+def test_build_whisper_cmd_without_vad_is_unchanged():
+    cmd = build_whisper_cmd(Path("/m/ggml-base.bin"), Path("/tmp/i.wav"), "en", 4)
+
+    assert "--vad" not in cmd
+    assert "-vm" not in cmd
+
+
+def test_build_whisper_cmd_adds_vad_flags():
+    vad = Path("/models/ggml-silero-v6.2.0.bin")
+
+    cmd = build_whisper_cmd(Path("/m/ggml-base.bin"), Path("/tmp/i.wav"), "en", 4, vad)
+
+    assert cmd[-3:] == ["--vad", "-vm", str(vad)]
+    assert cmd.count("--vad") == 1
+
+
+def test_build_whisper_cmd_keeps_vad_paths_with_spaces_intact():
+    vad = Path("/models/silero v6/ggml-silero-v6.2.0.bin")
+
+    cmd = build_whisper_cmd(Path("/m/ggml-base.bin"), Path("/tmp/i.wav"), "en", 4, vad)
+
+    assert cmd[cmd.index("-vm") + 1] == str(vad)

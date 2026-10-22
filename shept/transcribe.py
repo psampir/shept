@@ -61,8 +61,14 @@ def build_whisper_cmd(
     wav_path: Path,
     lang: str,
     threads: int,
+    vad_model: Path | None = None,
 ) -> list[str]:
-    """Build the whisper-cli argv for transcribing `wav_path`."""
+    """Build the whisper-cli argv for transcribing `wav_path`.
+
+    Passing `vad_model` turns on whisper.cpp's Silero VAD stage, which drops
+    silent stretches before they reach the model — that is what stops whisper
+    from inventing "thank you for watching" over trailing silence.
+    """
     cmd = [
         "whisper-cli",
         "-m",
@@ -74,6 +80,8 @@ def build_whisper_cmd(
         "-f",
         str(wav_path),
     ]
+    if vad_model is not None:
+        cmd += ["--vad", "-vm", str(vad_model)]
     return cmd
 
 

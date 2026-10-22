@@ -12,6 +12,9 @@ import subprocess
 from pathlib import Path
 
 MODEL_GLOB = "ggml-*.bin"
+#: whisper.cpp's VAD model is also a `ggml-*.bin` file, so it is matched
+#: separately and kept out of the transcription model list.
+VAD_MODEL_GLOB = "ggml-silero-*.bin"
 MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
 README_URL = "https://github.com/psampir/shept#install"
 ISSUES_URL = "https://github.com/psampir/shept/issues"
@@ -242,7 +245,11 @@ def default_language() -> str:
 
 
 def discover_models() -> list[Path]:
-    """Find models in every search path; first match wins on duplicates."""
+    """Find models in every search path; first match wins on duplicates.
+
+    Silero VAD files live in the same directories and match the same glob, but
+    they are not Whisper models, so they are filtered out here.
+    """
     seen: set[str] = set()
     models: list[Path] = []
     for directory in model_search_paths():
@@ -251,9 +258,43 @@ def discover_models() -> list[Path]:
         except OSError:
             continue
         for candidate in candidates:
+            if candidate.match(VAD_MODEL_GLOB):
+                continue
             name = model_display_name(candidate)
             if name in seen:
                 continue
             seen.add(name)
             models.append(candidate)
     return sorted(models, key=model_display_name)
+
+
+def find_vad_model() -> Path | None:
+    """Return the Silero VAD model whisper.cpp should load, or None.
+
+    The same directories as the Whisper models are searched; the first
+    `ggml-silero-*.bin` found wins, so a file the user installed next to their
+    models is used before anything further down the list.
+    """
+    for directory in model_search_paths():
+        try:
+            candidates = sorted(directory.glob(VAD_MODEL_GLOB))
+        except OSError:
+            continue
+        if candidates:
+            return candidates[0]
+    return None
+
+
+def default_skip_silence(vad_model: Path | None) -> bool:
+    """Whether Skip silence starts on: only when the VAD asset is installed.
+
+    Turning it on without the asset would make whisper.cpp fail on a missing
+    `-vm` file, so a fresh install starts with the switch off and offers a
+    download instead.
+    """
+    return vad_model is not None
+
+
+def vad_model_for(enabled: bool, vad_model: Path | None) -> Path | None:
+    """The `-vm` path a run should pass, or None when VAD is off or missing."""
+    return vad_model if enabled else None
