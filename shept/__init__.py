@@ -7,6 +7,6 @@ where PyGObject is not installed. Everything that needs `gi` lives in
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 APP_ID = "io.github.psampir.Shept"

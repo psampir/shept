@@ -105,6 +105,17 @@
   </content_rating>
 
   <releases>
+    <release version="0.1.1" date="2026-10-22">
+      <description>
+        <p>A small follow-up to the first release.</p>
+        <ul>
+          <li>New application icon and README logo</li>
+          <li>The wheel now installs the desktop entry and the icon</li>
+          <li>The Flatpak manifest grants network access, so the model
+          downloader works inside the sandbox</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-22">
       <description>
         <p>First release.</p>
