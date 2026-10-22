@@ -30,6 +30,12 @@ classifiers = [
 # Requirements section of the README.
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.4",
+]
+
 [project.urls]
 Homepage = "https://github.com/psampir/skryba"
 Issues = "https://github.com/psampir/skryba/issues"
@@ -39,3 +45,7 @@ skryba = "skryba.app:main"
 
 [tool.setuptools.packages.find]
 include = ["skryba*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
