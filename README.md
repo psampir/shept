@@ -19,13 +19,16 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
 
 ## What it does
 
-- Pick any audio or video file (mp3, wav, m4a, ogg, opus, flac, aac, mp4,
-  mkv, mov, webm, avi, …)
-- Transcribe locally with a Whisper model of your choice
+- Add any audio or video file to a queue — mp3, wav, m4a, ogg, opus, flac,
+  aac, mp4, mkv, mov, webm, avi, … — with the file dialog, drag & drop, or the
+  command line
+- Transcribe locally with a Whisper model of your choice, one file after
+  another, so a batch can run unattended
 - Download models from inside the app, with progress and cancellation
-- Streams output as it transcribes, with a progress bar
-- Copy the transcript, or save it with timestamps as `.txt`, `.srt`, `.vtt`,
-  `.lrc` or `.json`
+- Streams output as it transcribes, with a per-file progress bar and a summary
+  when the batch ends
+- Copy or save the selected file's transcript, or export every finished file
+  at once — `.txt`, `.srt`, `.vtt`, `.lrc` or `.json`
 
 Everything runs on your machine: no accounts, no uploads, no network access
 during transcription. The only network access is a model download you start
@@ -197,20 +200,40 @@ python3 -m shept
 Once installed (`pip install .`), the same thing is available as the `shept`
 command.
 
-1. **Choose…** an audio or video file
+1. **Add files…** queues one or more audio or video files. Dropping files onto
+   the window works too, as does passing them on the command line
+   (`python3 -m shept a.mp3 b.wav`) or opening them from the desktop. Files
+   that are already in the queue, and paths that are not regular files, are
+   skipped instead of queued twice.
 2. Pick a **Model** (`large-v3-turbo` is selected automatically if present).
    Press **Manage…** to download one if the list is empty or you want another.
 3. Pick the source **Language** (defaults to your system locale when Shept
    supports it, otherwise auto-detect)
 4. Optionally toggle **Translate to English** to get an English translation
    instead of a transcript in the source language
-5. Click **Transcribe**. The progress bar first tracks ffmpeg decoding, then
-   the text segments stream in as whisper-cli produces them
-6. Use the toolbar buttons to **copy** the transcript as plain text, or open the
-   **save** menu and pick a format: `.txt` (plain text), `.srt` and `.vtt`
-   (subtitles, with the timestamps whisper.cpp reported), `.lrc` (lyrics) or
-   `.json` (timed segments, versioned schema). The chosen menu entry decides
-   the content; the filename you type in the dialog does not affect it.
+5. Click **Transcribe all** — the button reads **Transcribe** when exactly one
+   file is waiting. Files are processed one at a time: the active row shows
+   `Transcribing…` with its own progress bar, the overall progress bar tracks
+   the current file, and finished rows are marked `Done — N segments`.
+   **Cancel** abandons the file that is running (it is marked `Cancelled`) and
+   leaves the rest pending, so pressing **Transcribe all** again resumes the
+   queue where it stopped.
+6. Select a row to read that file's transcript in the text view. The running
+   file is selected automatically, and switching rows keeps everything that
+   was already transcribed — segments stay attached to their file.
+7. Use the toolbar buttons to **copy** the selected transcript as plain text,
+   or open the **save** menu:
+   - **Selected file** writes that one transcript in the chosen format:
+     `.txt` (plain text), `.srt` and `.vtt` (subtitles, with the timestamps
+     whisper.cpp reported), `.lrc` (lyrics) or `.json` (timed segments,
+     versioned schema). The menu entry decides the content; the filename you
+     type in the dialog does not affect it.
+   - **Export all…** asks for a folder and writes every finished file into it
+     as `<file name>.<ext>`, appending ` (2)`, ` (3)` when two files share a
+     name. It uses the format you last picked in **Selected file** (plain text
+     until you pick one), and skips files that produced no text.
+8. **Clear finished** removes completed, failed and cancelled rows from the
+   queue without touching anything on disk.
 
 ### Desktop launcher (optional)
 
@@ -245,20 +268,30 @@ update-desktop-database ~/.local/share/applications/
 
 ## How it works
 
-When you press **Transcribe**, `ffmpeg` decodes the selected file to a
-temporary 16 kHz mono WAV file. `whisper-cli` then transcribes that WAV, and
+Every file in the queue goes through the same two stages. `ffmpeg` decodes it
+to a temporary 16 kHz mono WAV file, then `whisper-cli` transcribes that WAV and
 Shept parses the timestamped segments from its output as they arrive. Each
-segment keeps its start and end time: the text is appended to the text view,
-the end time drives the progress bar, and the stored segments are what the
-subtitle, lyrics and JSON exports are built from. The temporary WAV is removed
-when the run finishes or fails.
+segment keeps its start and end time: the text is appended to the text view, the
+end time drives the progress bars, and the stored segments are what the
+subtitle, lyrics and JSON exports are built from.
+
+Files are transcribed strictly one after another. Decoding and whisper-cli are
+already CPU/GPU-bound, so running two of them at once would make both slower and
+the progress bars meaningless. Each file's temporary WAV is removed as soon as
+its run ends. If a file fails — an unreadable container, a missing codec, a
+non-zero exit from whisper-cli — its row is marked `Failed` with the reason and
+the batch continues with the next file instead of stopping.
 
 ## Performance notes
 
 - Reading the source file is often the bottleneck for large videos stored on
   network mounts. Copy the file to local disk first if it feels slow.
-- `whisper-cli` only runs while the **Transcribe** button is busy. The GUI
-  process itself idles at around 80 MB of RAM and negligible CPU.
+- `whisper-cli` only runs while a file is being transcribed. The GUI process
+  itself idles at around 80 MB of RAM and negligible CPU.
+- Each file costs one model load, because whisper-cli is a fresh process per
+  file. A long batch is therefore cheaper per minute than a short one, and a
+  queue of many short clips spends a noticeable share of its time loading the
+  model.
 - Quantized models (`*-q5_0`, `*-q8_0`) roughly halve memory use with
   negligible quality loss.
 - GPU acceleration depends on the whisper.cpp build and the drivers, not on
@@ -269,10 +302,15 @@ when the run finishes or fails.
 **"whisper-cli not found in PATH"** — install it (see [Install](#install)) and
 make sure `which whisper-cli` returns a path. Shept shows the missing tool in a
 banner at the top of the window together with the install command for your
-distribution, and keeps **Transcribe** disabled until it is available.
+distribution, and keeps **Transcribe all** disabled until it is available.
 
 **"ffmpeg not found in PATH"** — install `ffmpeg` with your distribution's
 package manager; the same banner explains how.
+
+**One row says "Failed: …"** — that file could not be processed (damaged or
+unsupported container, missing codec, whisper-cli exited non-zero); the reason
+from the failing tool is in the row. The rest of the queue keeps running.
+Remove the row, fix the file, and add it again.
 
 **Model dropdown shows "(no models found)"** — no `ggml-*.bin` file was found in
 any of the directories listed under [Models](#models); the window lists the

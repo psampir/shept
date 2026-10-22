@@ -11,9 +11,10 @@
 
   <description>
     <p>
-      Shept turns audio and video files into text on your own machine. Pick a
-      recording, choose a Whisper model and press Transcribe: the transcript
-      streams in as it is produced, and can be copied or saved as plain text.
+      Shept turns audio and video files into text on your own machine. Add your
+      recordings to the queue, choose a Whisper model and press Transcribe all:
+      each file is transcribed in turn, the transcript streams in as it is
+      produced, and can be copied or saved as plain text, subtitles or JSON.
     </p>
     <p>
       Everything happens locally. There are no accounts, no uploads and no
@@ -23,9 +24,11 @@
     </p>
     <ul>
       <li>Supports the common audio and video containers (mp3, wav, m4a, ogg, opus, flac, aac, mp4, mkv, mov, webm, avi)</li>
+      <li>A batch queue: add many files and transcribe them one after another, with per-file progress</li>
       <li>Streaming output and a progress bar driven by the real timestamps</li>
       <li>Language selection, or automatic detection</li>
       <li>Optional translation of the result into English</li>
+      <li>Export each transcript on its own, or every finished file into one folder</li>
       <li>GPU acceleration through Vulkan when whisper.cpp was built with it</li>
     </ul>
   </description>
