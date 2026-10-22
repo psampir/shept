@@ -4,6 +4,8 @@
 
 Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
 
+![Shept transcribing a queue of files](data/screenshots/queue.png)
+
 ## Contents
 
 - [What it does](#what-it-does)
@@ -15,6 +17,7 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
 - [Performance notes](#performance-notes)
 - [Troubleshooting](#troubleshooting)
 - [Status](#status)
+- [Changelog](#changelog)
 - [License](#license)
 
 ## What it does
@@ -335,6 +338,12 @@ clean it up manually.
 Shept is pre-release software under active development. Development happens on
 the `dev` branch; `main` only carries released versions. The interface,
 packaging and supported platforms may change without notice.
+
+## Changelog
+
+Released versions are documented in [CHANGELOG.md](CHANGELOG.md); the
+`[Unreleased]` section there collects what has landed on `dev` since the last
+tag.
 
 ## License
 

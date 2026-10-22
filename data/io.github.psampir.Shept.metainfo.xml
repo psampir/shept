@@ -7,7 +7,9 @@
   <name>Shept</name>
   <summary>Transcribe audio and video files locally with whisper.cpp</summary>
 
-  <developer_name>Paweł Sampir</developer_name>
+  <developer id="io.github.psampir">
+    <name>Paweł Sampir</name>
+  </developer>
 
   <description>
     <p>
@@ -33,9 +35,22 @@
     </ul>
   </description>
 
-  <!-- Flathub expects at least one <screenshots> entry before submission.
-       Add one (with a caption and an image served over https) when the first
-       release is tagged. -->
+  <!-- Flathub expects at least one screenshot served over https. These point
+       at the v0.1.0 tag of the (currently private) GitHub repository, so they
+       answer 404 until the repository is published and v0.1.0 is tagged. They
+       are pinned to the tag rather than to a branch on purpose: the images
+       then cannot drift away from the release they describe. -->
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Queue a batch of files and read each transcript as it is produced</caption>
+      <image type="source">https://raw.githubusercontent.com/psampir/shept/v0.1.0/data/screenshots/queue.png</image>
+    </screenshot>
+    <screenshot type="additional">
+      <caption>Download Whisper models without leaving the app</caption>
+      <image type="source">https://raw.githubusercontent.com/psampir/shept/v0.1.0/data/screenshots/models.png</image>
+    </screenshot>
+  </screenshots>
 
   <launchable type="desktop-id">io.github.psampir.Shept.desktop</launchable>
 
@@ -93,7 +108,14 @@
   <releases>
     <release version="0.1.0" date="2026-10-22">
       <description>
-        <p>Initial release.</p>
+        <p>First release.</p>
+        <ul>
+          <li>Transcribe audio and video files locally with whisper.cpp</li>
+          <li>Batch queue: many files, one after another, with per-file progress</li>
+          <li>Export transcripts as plain text, SRT, VTT, LRC or JSON</li>
+          <li>Download Whisper models from inside the application</li>
+          <li>GTK4 / libadwaita interface, with a Flatpak manifest</li>
+        </ul>
       </description>
     </release>
   </releases>
