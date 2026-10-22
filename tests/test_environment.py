@@ -214,13 +214,7 @@ def test_detect_distro_unreadable_file(tmp_path):
 
 
 def test_detect_distro_skips_comments_and_malformed_lines(tmp_path):
-    text = (
-        "# ID=debian\n"
-        "\n"
-        "no equals sign here\n"
-        "ID = fedora \n"
-        "ID_LIKE =\n"
-    )
+    text = "# ID=debian\n\nno equals sign here\nID = fedora \nID_LIKE =\n"
     assert environment.detect_distro(_os_release(tmp_path, text)) == "fedora"
 
 

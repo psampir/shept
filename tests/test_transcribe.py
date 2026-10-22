@@ -32,7 +32,10 @@ def test_ts_to_seconds(timestamp, expected):
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
-        ("[00:00:01.000 --> 00:00:03.000] Hello there", ("00:00:03.000", "Hello there")),
+        (
+            "[00:00:01.000 --> 00:00:03.000] Hello there",
+            ("00:00:03.000", "Hello there"),
+        ),
         (
             "[00:00:01.000 --> 00:00:03.000]   spaced out  ",
             ("00:00:03.000", "spaced out"),
@@ -140,7 +143,9 @@ def test_build_whisper_cmd_translate_flag():
 
 @pytest.mark.parametrize("threads", [1, 4, 8])
 def test_build_whisper_cmd_renders_threads_as_string(threads):
-    cmd = build_whisper_cmd(Path("/m/ggml-base.bin"), Path("/tmp/i.wav"), "en", threads, False)
+    cmd = build_whisper_cmd(
+        Path("/m/ggml-base.bin"), Path("/tmp/i.wav"), "en", threads, False
+    )
 
     assert cmd[cmd.index("-t") + 1] == str(threads)
     assert isinstance(cmd[cmd.index("-t") + 1], str)

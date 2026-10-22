@@ -98,9 +98,7 @@ class SkrybaWindow(Adw.ApplicationWindow):
         group = Adw.PreferencesGroup()
         controls.append(group)
 
-        self.file_row = Adw.ActionRow(
-            title="Audio file", subtitle="No file selected"
-        )
+        self.file_row = Adw.ActionRow(title="Audio file", subtitle="No file selected")
         choose_btn = Gtk.Button(label="Choose…")
         choose_btn.set_valign(Gtk.Align.CENTER)
         choose_btn.connect("clicked", self._on_choose_file)
@@ -217,17 +215,29 @@ class SkrybaWindow(Adw.ApplicationWindow):
     def _update_run_state(self) -> None:
         blocker = self._transcribe_blocker()
         self.run_btn.set_sensitive(not blocker)
-        self.run_btn.set_tooltip_text(
-            blocker or "Transcribe the selected audio file."
-        )
+        self.run_btn.set_tooltip_text(blocker or "Transcribe the selected audio file.")
 
     def _on_choose_file(self, _btn: Gtk.Button) -> None:
         dialog = Gtk.FileDialog(title="Select audio file")
         audio_filter = Gtk.FileFilter()
         audio_filter.set_name("Audio / video files")
         for ext in (
-            "mp3", "wav", "m4a", "ogg", "opus", "flac", "aac",
-            "mp4", "webm", "mkv", "mov", "avi", "wmv", "ts", "m4v", "3gp",
+            "mp3",
+            "wav",
+            "m4a",
+            "ogg",
+            "opus",
+            "flac",
+            "aac",
+            "mp4",
+            "webm",
+            "mkv",
+            "mov",
+            "avi",
+            "wmv",
+            "ts",
+            "m4v",
+            "3gp",
         ):
             audio_filter.add_pattern(f"*.{ext}")
             audio_filter.add_pattern(f"*.{ext.upper()}")
@@ -275,8 +285,12 @@ class SkrybaWindow(Adw.ApplicationWindow):
         self.status.set_text("Extracting audio with ffmpeg…")
         threading.Thread(
             target=self._worker,
-            args=(self._input_file, model, self._selected_lang(),
-                  self.translate_row.get_active()),
+            args=(
+                self._input_file,
+                model,
+                self._selected_lang(),
+                self.translate_row.get_active(),
+            ),
             daemon=True,
         ).start()
 
@@ -293,8 +307,11 @@ class SkrybaWindow(Adw.ApplicationWindow):
         input_duration = self._probe_duration(input_path)
         ffmpeg_cmd = build_ffmpeg_cmd(input_path, wav_path)
         ff = subprocess.Popen(
-            ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1,
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
         )
         assert ff.stdout is not None
         for line in ff.stdout:
@@ -304,7 +321,8 @@ class SkrybaWindow(Adw.ApplicationWindow):
             if input_duration > 0:
                 frac = max(0.0, min(1.0, secs / input_duration))
                 GLib.idle_add(
-                    self._set_progress, frac,
+                    self._set_progress,
+                    frac,
                     f"Decoding audio… {int(frac * 100)}%",
                 )
         if ff.wait() != 0:
@@ -336,15 +354,26 @@ class SkrybaWindow(Adw.ApplicationWindow):
             self._handle_line(line.rstrip("\n"), duration)
         ret = self._proc.wait()
         self._proc = None
-        GLib.idle_add(self._finish, ret == 0,
-                      "Done." if ret == 0 else f"whisper-cli exited with {ret}")
+        GLib.idle_add(
+            self._finish,
+            ret == 0,
+            "Done." if ret == 0 else f"whisper-cli exited with {ret}",
+        )
 
     @staticmethod
     def _probe_duration(media: Path) -> float:
         try:
             out = subprocess.check_output(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=nw=1:nk=1", str(media)],
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    str(media),
+                ],
                 text=True,
             ).strip()
             return float(out)
@@ -372,7 +401,7 @@ class SkrybaWindow(Adw.ApplicationWindow):
         self.progress.set_text(f"{label}  ({int(frac * 100)}%)")
         return False
 
-    def _finish(self, ok: bool, msg: str) -> bool:
+    def _finish(self, _ok: bool, msg: str) -> bool:
         self.progress.set_visible(False)
         self._update_run_state()
         has_text = self.buffer.get_char_count() > 0
