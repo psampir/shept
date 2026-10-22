@@ -25,6 +25,12 @@ MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
 README_URL = "https://github.com/psampir/shept#install"
 ISSUES_URL = "https://github.com/psampir/shept/issues"
 
+#: Where a model search path comes from, as the model manager labels it.
+ORIGIN_ENV = "SHEPT_MODEL_DIR"
+ORIGIN_USER = "Added by you"
+ORIGIN_DEFAULT = "Default"
+ORIGIN_SYSTEM = "System"
+
 #: Tools a run cannot work without: decoding is ffmpeg, transcription is
 #: whisper-cli.
 RUN_TOOLS = ("whisper-cli", "ffmpeg")
@@ -119,38 +125,70 @@ def detect_backend() -> str:
         return "unknown"
 
 
-def model_search_paths() -> list[Path]:
-    """Directories searched for models, highest priority first."""
+def _search_candidates(extra: Sequence[Path]) -> list[tuple[Path, str]]:
+    """Every directory Shept would search, with where it comes from.
+
+    One list feeds both the search itself and the model manager's folder list,
+    so the order and the labels the window shows can never drift apart.
+    """
     home = Path.home()
     data_home = os.environ.get("XDG_DATA_HOME", "")
     data_dir = Path(data_home) if data_home else home / ".local" / "share"
-    override = os.environ.get("SHEPT_MODEL_DIR", "")
+    override = os.environ.get("SHEPT_MODEL_DIR", "").strip()
 
-    wanted: list[Path] = []
+    candidates: list[tuple[Path, str]] = []
     if override:
-        wanted.append(Path(override).expanduser())
-    wanted.extend(
+        candidates.append((Path(override).expanduser(), ORIGIN_ENV))
+    candidates.extend((Path(path).expanduser(), ORIGIN_USER) for path in extra)
+    candidates.extend(
         [
-            data_dir / "shept" / "models",
-            data_dir / "whisper-cpp" / "models",
+            (data_dir / "shept" / "models", ORIGIN_DEFAULT),
+            (data_dir / "whisper-cpp" / "models", ORIGIN_DEFAULT),
             # Both the XDG data home and the real home are searched. Inside the
             # Flatpak sandbox XDG_DATA_HOME is app-private (~/.var/app/<app-id>/
             # data) while $HOME is still the user's home, because the manifest
             # grants `--filesystem=home:ro`; without this entry the models a
             # user installed in ~/.local/share would be invisible. The same
             # applies to any user with a non-default XDG_DATA_HOME.
-            home / ".local" / "share" / "whisper-cpp" / "models",
-            home / ".cache" / "whisper.cpp" / "models",
-            Path("/usr/share/whisper-cpp/models"),
-            Path("/usr/local/share/whisper-cpp/models"),
+            (home / ".local" / "share" / "whisper-cpp" / "models", ORIGIN_DEFAULT),
+            (home / ".cache" / "whisper.cpp" / "models", ORIGIN_DEFAULT),
+            (Path("/usr/share/whisper-cpp/models"), ORIGIN_SYSTEM),
+            (Path("/usr/local/share/whisper-cpp/models"), ORIGIN_SYSTEM),
         ]
     )
+    return candidates
 
+
+def model_search_paths(extra: Sequence[Path] = ()) -> list[Path]:
+    """Directories searched for models, highest priority first.
+
+    `extra` holds the folders the user added in the model manager; they come
+    after `$SHEPT_MODEL_DIR` and before the defaults, in the user's own order.
+    Duplicates keep their first position, so adding a folder Shept already
+    searches changes nothing.
+    """
     paths: list[Path] = []
-    for path in wanted:
+    for path, _origin in _search_candidates(extra):
         if path not in paths:
             paths.append(path)
     return paths
+
+
+def model_search_origins(extra: Sequence[Path] = ()) -> list[tuple[Path, str]]:
+    """The effective search paths, each with the label the UI shows for it.
+
+    Deduplicated like `model_search_paths`, so a folder the user added that
+    Shept would have searched anyway is listed once, under the more specific
+    reason.
+    """
+    seen: list[Path] = []
+    origins: list[tuple[Path, str]] = []
+    for path, origin in _search_candidates(extra):
+        if path in seen:
+            continue
+        seen.append(path)
+        origins.append((path, origin))
+    return origins
 
 
 def model_display_name(path: Path) -> str:
@@ -265,15 +303,20 @@ def default_language() -> str:
     return "auto"
 
 
-def discover_models() -> list[Path]:
+def discover_models(extra: Sequence[Path] = ()) -> list[Path]:
     """Find models in every search path; first match wins on duplicates.
 
     Silero VAD files live in the same directories and match the same glob, but
-    they are not Whisper models, so they are filtered out here.
+    they are not Whisper models, so they are filtered out here. `extra` is the
+    list of folders the user added in the model manager.
     """
     seen: set[str] = set()
     models: list[Path] = []
-    for directory in model_search_paths():
+    # Called without the argument when there is nothing extra, so a caller —
+    # or a test — that replaced `model_search_paths` with a no-argument
+    # stand-in keeps working.
+    directories = model_search_paths(extra) if extra else model_search_paths()
+    for directory in directories:
         try:
             candidates = sorted(directory.glob(MODEL_GLOB))
         except OSError:
@@ -289,16 +332,19 @@ def discover_models() -> list[Path]:
     return sorted(models, key=model_display_name)
 
 
-def find_vad_model() -> Path | None:
+def find_vad_model(extra: Sequence[Path] = ()) -> Path | None:
     """Return the Silero VAD model whisper.cpp should load, or None.
 
     The same directories as the Whisper models are searched; the first
     `ggml-silero-*.bin` of the expected size wins, so a file the user installed
     next to their models is used before anything further down the list. A
     truncated or corrupt file counts as missing rather than being offered as
-    `-vm`, which would only fail the next run.
+    `-vm`, which would only fail the next run. `extra` matches
+    `discover_models`, so a model folder the user added is searched for the
+    asset too.
     """
-    for directory in model_search_paths():
+    directories = model_search_paths(extra) if extra else model_search_paths()
+    for directory in directories:
         try:
             candidates = sorted(directory.glob(VAD_MODEL_GLOB))
         except OSError:

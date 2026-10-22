@@ -118,6 +118,7 @@ def test_saved_file_is_readable_json(target):
         "language": "uk",
         "skip_silence": True,
         "favourites": [],
+        "model_dirs": [],
     }
 
 
@@ -346,3 +347,79 @@ def test_a_favourites_list_of_only_junk_becomes_empty(locale_env, target):
     _write(target, {"favourites": [5, None, "xx"]})
 
     assert load(target).favourites == []
+
+
+# ---------------------------------------------------------------- model folders
+
+
+def test_model_dirs_default_to_empty(locale_env):
+    assert Settings().model_dirs == []
+
+
+def test_model_dirs_round_trip_in_order(target):
+    original = Settings(model_dirs=["/srv/models", "/mnt/audio/ggml"])
+
+    save(original, target)
+
+    assert load(target).model_dirs == ["/srv/models", "/mnt/audio/ggml"]
+
+
+def test_model_dirs_are_saved_in_the_json(target):
+    save(Settings(model_dirs=["/srv/models"]), target)
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+
+    assert payload["model_dirs"] == ["/srv/models"]
+
+
+def test_a_settings_file_without_model_dirs_still_loads(locale_env, target):
+    _write(target, {"model": "small", "language": "pl", "skip_silence": True})
+
+    settings = load(target)
+
+    assert settings == Settings(model="small", language="pl", skip_silence=True)
+    assert settings.model_dirs == []
+
+
+def test_model_dirs_expands_home(locale_env, target, monkeypatch):
+    monkeypatch.setenv("HOME", "/home/tester")
+    _write(target, {"model_dirs": ["~/whisper-models"]})
+
+    assert load(target).model_dirs == ["/home/tester/whisper-models"]
+
+
+def test_model_dirs_normalises_trailing_slashes(locale_env, target):
+    _write(target, {"model_dirs": ["/srv/models/"]})
+
+    assert load(target).model_dirs == ["/srv/models"]
+
+
+def test_model_dirs_are_deduplicated_keeping_the_first(locale_env, target):
+    _write(target, {"model_dirs": ["/b", "/a", "/b", "/a/"]})
+
+    assert load(target).model_dirs == ["/b", "/a"]
+
+
+def test_model_dirs_drops_relative_and_empty_entries(locale_env, target):
+    _write(target, {"model_dirs": ["models", "", "   ", "/srv/models", "./x"]})
+
+    assert load(target).model_dirs == ["/srv/models"]
+
+
+@pytest.mark.parametrize("value", ["/srv/models", 5, None, {}, True])
+def test_a_non_list_model_dirs_value_becomes_empty(locale_env, target, value):
+    _write(target, {"model_dirs": value})
+
+    assert load(target).model_dirs == []
+
+
+def test_non_string_model_dirs_are_dropped(locale_env, target):
+    _write(target, {"model_dirs": [5, None, ["/x"], {"y": True}, "/srv/models"]})
+
+    assert load(target).model_dirs == ["/srv/models"]
+
+
+def test_a_model_dirs_list_of_only_junk_becomes_empty(locale_env, target):
+    _write(target, {"model_dirs": [5, None, "relative", ""]})
+
+    assert load(target).model_dirs == []

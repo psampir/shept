@@ -10,7 +10,8 @@ from __future__ import annotations
 import errno
 import os
 import socket
-from collections.abc import Callable
+import stat
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -302,6 +303,87 @@ def is_complete_vad(path: Path) -> bool:
 def size_tolerance(size_bytes: int) -> int:
     """Allowed size drift for a model file: 1% of its size, capped at 1 MiB."""
     return min(SIZE_TOLERANCE, max(1, size_bytes // 100))
+
+
+# ---------------------------------------------------- deleting installed models
+
+#: The model the app recommends, so it wins the fallback selection after a
+#: deletion even when another installed model sorts first alphabetically.
+PREFERRED_MODEL = "large-v3-turbo"
+
+#: Directories that belong to the system rather than to the user. Shept never
+#: deletes from them, even when the current user happens to be allowed to.
+READ_ONLY_PREFIXES = (
+    Path("/usr"),
+    Path("/nix/store"),
+    Path("/snap"),
+)
+
+
+def in_read_only_location(path: Path) -> bool:
+    """True when `path` sits below a directory that is not the user's to edit."""
+    path = Path(path)
+    return any(
+        path == prefix or prefix in path.parents for prefix in READ_ONLY_PREFIXES
+    )
+
+
+def is_deletable(path: Path) -> bool:
+    """True when Shept can actually remove `path`.
+
+    Both conditions are checked rather than assumed: the containing directory
+    must be writable — unlinking a file needs write access to the directory,
+    not to the file — and the file must not live in a system directory. Inside
+    the Flatpak the manifest grants `home:ro`, so `~/.local/share/whisper-cpp/
+    models` looks writable by its mode bits while `access(W_OK)` still refuses
+    it; those rows get a lock icon instead of a trash button that could only
+    fail.
+
+    A symlink counts as deletable when its own directory is writable, because
+    removing it writes to that directory and never touches the target.
+    """
+    path = Path(path)
+    try:
+        mode = path.lstat().st_mode
+    except OSError:
+        return False
+    if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+        return False
+    if in_read_only_location(path):
+        return False
+    return os.access(path.parent, os.W_OK)
+
+
+def deletable_paths(paths: Iterable[Path]) -> set[Path]:
+    """The subset of `paths` that `is_deletable` accepts."""
+    return {Path(path) for path in paths if is_deletable(path)}
+
+
+def delete_model(path: Path) -> None:
+    """Remove one model file, raising `OSError` when that is not possible.
+
+    `unlink` is deliberate: for a symlink it removes the link and leaves the
+    file it points at alone, which is what a user who linked a model in from
+    another disk expects. Nothing else in the directory is touched, so no
+    `.part` file or temporary copy can be left behind by a deletion.
+    """
+    Path(path).unlink()
+
+
+def pick_model_after_delete(models: Sequence[str], deleted: str) -> str | None:
+    """The model to select once `deleted` is gone, or None when none are left.
+
+    `large-v3-turbo` is the model the app recommends, so it is preferred over
+    the alphabetically first remaining one; the first remaining model is the
+    fallback, and an empty result means the window shows its "no models"
+    state.
+    """
+    remaining = [name for name in models if name != deleted]
+    if not remaining:
+        return None
+    if PREFERRED_MODEL in remaining:
+        return PREFERRED_MODEL
+    return remaining[0]
 
 
 def download(

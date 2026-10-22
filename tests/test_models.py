@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import errno
 import io
+import os
 import socket
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -438,6 +439,157 @@ def test_is_complete_vad_rejects_a_truncated_file(tmp_path):
 
 def test_is_complete_vad_rejects_a_missing_file(tmp_path):
     assert models.is_complete_vad(tmp_path / VAD_SPEC.filename) is False
+
+
+# --------------------------------------------------- deleting installed models
+
+requires_non_root = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores directory permissions, so the check cannot fail",
+)
+
+
+def _touch(path: Path) -> Path:
+    path.write_text("", encoding="utf-8")
+    return path
+
+
+def _writable(parent: Path) -> Path:
+    directory = parent / "models"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _read_only(directory: Path) -> Path:
+    """Make `directory` unwritable and remember to undo it for the cleanup."""
+    directory.chmod(0o555)
+    return directory
+
+
+def test_is_deletable_accepts_a_file_in_a_writable_directory(tmp_path):
+    directory = _writable(tmp_path)
+    model = _touch(directory / "ggml-small.bin")
+
+    assert models.is_deletable(model) is True
+
+
+def test_is_deletable_rejects_a_missing_file(tmp_path):
+    assert models.is_deletable(tmp_path / "ggml-small.bin") is False
+
+
+@requires_non_root
+def test_is_deletable_rejects_a_read_only_directory(tmp_path):
+    directory = _writable(tmp_path)
+    model = _touch(directory / "ggml-small.bin")
+    _read_only(directory)
+    try:
+        assert models.is_deletable(model) is False
+    finally:
+        directory.chmod(0o755)
+
+
+@requires_non_root
+def test_is_deletable_accepts_a_symlink_in_a_writable_directory(tmp_path):
+    """The link is what gets unlinked, so a read-only target must not matter."""
+    target_dir = _writable(tmp_path / "elsewhere")
+    target = _touch(target_dir / "ggml-small.bin")
+    directory = _writable(tmp_path)
+    link = directory / "ggml-small.bin"
+    link.symlink_to(target)
+    _read_only(target_dir)
+    try:
+        assert models.is_deletable(link) is True
+    finally:
+        target_dir.chmod(0o755)
+
+
+def test_is_deletable_rejects_a_directory(tmp_path):
+    directory = _writable(tmp_path) / "ggml-small.bin"
+    directory.mkdir()
+
+    assert models.is_deletable(directory) is False
+
+
+def test_is_deletable_rejects_a_system_location(tmp_path, monkeypatch):
+    """`/usr` is off limits even for a user who could technically write there."""
+    model = _touch(tmp_path / "ggml-small.bin")
+    monkeypatch.setattr(models, "READ_ONLY_PREFIXES", (tmp_path,))
+
+    assert models.is_deletable(model) is False
+
+
+def test_deletable_paths_keeps_only_the_deletable_ones(tmp_path):
+    directory = _writable(tmp_path)
+    good = _touch(directory / "ggml-small.bin")
+    missing = directory / "ggml-gone.bin"
+
+    assert models.deletable_paths([good, missing]) == {good}
+
+
+def test_deletable_paths_of_nothing_is_empty():
+    assert models.deletable_paths([]) == set()
+
+
+def test_delete_model_removes_the_file(tmp_path):
+    model = _touch(_writable(tmp_path) / "ggml-small.bin")
+
+    models.delete_model(model)
+
+    assert not model.exists()
+
+
+def test_delete_model_unlinks_a_symlink_and_keeps_the_target(tmp_path):
+    directory = _writable(tmp_path)
+    target = tmp_path / "store" / "ggml-small.bin"
+    target.parent.mkdir()
+    _touch(target)
+    link = directory / "ggml-small.bin"
+    link.symlink_to(target)
+
+    models.delete_model(link)
+
+    assert not link.is_symlink()
+    assert target.is_file()
+
+
+def test_delete_model_raises_for_a_missing_file(tmp_path):
+    with pytest.raises(OSError):
+        models.delete_model(tmp_path / "ggml-small.bin")
+
+
+def test_pick_model_after_delete_prefers_large_v3_turbo():
+    remaining = ["base", "large-v3-turbo", "small"]
+
+    assert models.pick_model_after_delete(remaining, "medium") == "large-v3-turbo"
+
+
+def test_pick_model_after_delete_falls_back_to_the_first_remaining():
+    remaining = ["base", "medium", "small"]
+
+    assert models.pick_model_after_delete(remaining, "large-v3-turbo") == "base"
+
+
+def test_pick_model_after_delete_when_the_first_was_selected():
+    models_before = ["base", "large-v3-turbo", "small"]
+
+    assert models.pick_model_after_delete(models_before, "base") == "large-v3-turbo"
+
+
+def test_pick_model_after_delete_when_the_last_was_selected():
+    models_before = ["base", "medium", "small"]
+
+    assert models.pick_model_after_delete(models_before, "small") == "base"
+
+
+def test_pick_model_after_delete_when_it_was_not_selected():
+    models_before = ["small", "tiny"]
+
+    assert models.pick_model_after_delete(models_before, "medium") == "small"
+
+
+def test_pick_model_after_delete_returns_none_when_nothing_is_left():
+    assert models.pick_model_after_delete(["small"], "small") is None
+    assert models.pick_model_after_delete([], "small") is None
 
 
 # ------------------------------------------------ friendly download failures

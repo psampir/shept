@@ -26,6 +26,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 from shept import APP_ID, settings  # noqa: E402
 from shept.environment import (  # noqa: E402
     MODELS_URL,
+    ORIGIN_USER,
     RUN_TOOLS,
     abbreviate_home,
     default_language,
@@ -36,6 +37,7 @@ from shept.environment import (  # noqa: E402
     install_hint,
     missing_tools,
     model_display_name,
+    model_search_origins,
     model_search_paths,
     vad_model_for,
 )
@@ -52,12 +54,15 @@ from shept.models import (  # noqa: E402
     DownloadCancelled,
     ModelSpec,
     VadState,
+    delete_model,
     describe_download_error,
     download,
     download_dir,
     download_error_tooltip,
     human_size,
+    is_deletable,
     is_downloaded,
+    pick_model_after_delete,
     vad_state_text,
 )
 from shept.queue import Job, JobState, Queue, export_all, exportable_jobs  # noqa: E402
@@ -110,10 +115,67 @@ class _Cancelled(Exception):
     """Raised inside a worker thread when the user pressed Cancel."""
 
 
+#: Shown in place of a trash button when a model cannot be removed. The
+#: Flatpak sentence matters: the sandbox mounts the home directory read-only,
+#: so a folder that looks writable on the host is not writable in there.
+READ_ONLY_TOOLTIP = (
+    "This is a read-only location, so the model cannot be deleted from here. "
+    "Inside the Flatpak, only ~/.local/share/shept/models is writable."
+)
+
+
+def confirm_destructive(
+    parent: Gtk.Window,
+    heading: str,
+    body: str,
+    label: str,
+    on_confirm: Callable[[], None],
+) -> Gtk.Window:
+    """Ask for confirmation before a destructive action and return the dialog.
+
+    `Adw.AlertDialog` is the modern API, but it only exists from libadwaita
+    1.5 and the Flatpak runtime still ships 1.4, so the same prompt is built
+    with `Adw.MessageDialog` there. Both spellings live here, which keeps the
+    callers free of version checks, and returning the dialog lets a harness
+    answer it without a pointer to the window.
+    """
+    alert = getattr(Adw, "AlertDialog", None)
+    appearance = getattr(Adw, "ResponseAppearance", None)
+    if alert is not None and appearance is not None:
+        dialog: object = alert(heading=heading, body=body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("confirm", label)
+        dialog.set_response_appearance("confirm", appearance.DESTRUCTIVE)
+    else:
+        dialog = Adw.MessageDialog(transient_for=parent, heading=heading, body=body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("confirm", label)
+    dialog.set_default_response("cancel")
+    dialog.set_close_response("cancel")
+
+    def on_response(_dialog: object, response: str) -> None:
+        if response == "confirm":
+            on_confirm()
+
+    dialog.connect("response", on_response)
+    if alert is not None and appearance is not None:
+        dialog.present(parent)
+    else:
+        dialog.present()
+    return dialog
+
+
 class SheptWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
         super().__init__(application=app, title="Shept")
         self.set_default_size(820, 680)
+
+        # Settings are read once, before any widget, because the VAD switch
+        # depends on the asset and the asset is searched for in the folders the
+        # user added as well. `_restore_settings` applies the same object.
+        self._stored = settings.load()
+        #: Extra model folders the user added in the model manager.
+        self._model_dirs: list[Path] = [Path(item) for item in self._stored.model_dirs]
 
         #: One process at a time: the ffmpeg of the job being decoded or the
         #: whisper-cli of the job being transcribed. Cancel terminates it.
@@ -307,7 +369,7 @@ class SheptWindow(Adw.ApplicationWindow):
         # by default only when that asset is installed: turning it on without
         # it would make whisper-cli fail on a missing -vm file, so the hint
         # below offers to download it instead.
-        self._vad_model = find_vad_model()
+        self._vad_model = find_vad_model(self._model_dirs)
         self.vad_row = Adw.SwitchRow(
             title="Skip silence",
             subtitle="Drop silent stretches so whisper cannot invent text over them",
@@ -391,10 +453,11 @@ class SheptWindow(Adw.ApplicationWindow):
         restoring the widgets never writes a settings file of its own.
         """
         path = settings.settings_path()
-        stored = settings.load(path)
+        stored = self._stored
 
-        if stored.model is not None:
-            self._reload_models(select=stored.model)
+        # Always reload: the model list has to include the folders that were
+        # just restored from settings, whether or not a model was stored.
+        self._reload_models(select=stored.model)
 
         self._favourites = list(stored.favourites)
         self._set_language(stored.language)
@@ -420,6 +483,7 @@ class SheptWindow(Adw.ApplicationWindow):
             language=self._selected_lang(),
             skip_silence=self.vad_row.get_active() and self._vad_model is not None,
             favourites=list(self._favourites),
+            model_dirs=[str(path) for path in self._model_dirs],
         )
 
     def _save_settings(self) -> None:
@@ -476,34 +540,50 @@ class SheptWindow(Adw.ApplicationWindow):
 
     def _models_hint(self) -> Gtk.Widget:
         """Explain where models were searched and how to get one."""
-        searched = "\n".join(f"  {path}" for path in model_search_paths())
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        label = Gtk.Label(
-            label=(
-                "No Whisper model found. Searched:\n"
-                f"{searched}\n"
-                'Use "Manage…" above to download one, or drop a ggml-*.bin '
-                "file into one of those directories."
-            ),
-            xalign=0,
-        )
-        label.set_wrap(True)
-        label.add_css_class("dim-label")
-        box.append(label)
+        # The text is filled in by `_update_models_hint`, which runs whenever
+        # the folder list changes, so the hint cannot name stale directories.
+        self._hint_label = Gtk.Label(xalign=0)
+        self._hint_label.set_wrap(True)
+        self._hint_label.add_css_class("dim-label")
+        box.append(self._hint_label)
         link = Gtk.LinkButton.new_with_label(MODELS_URL, "Get models")
         link.set_halign(Gtk.Align.START)
         box.append(link)
         return box
 
+    def _update_models_hint(self) -> None:
+        """Write the effective search paths into the "no models" hint."""
+        searched = "\n".join(f"  {path}" for path in self._effective_search_paths())
+        self._hint_label.set_text(
+            "No Whisper model found. Searched:\n"
+            f"{searched}\n"
+            'Use "Manage…" above to download one, or drop a ggml-*.bin '
+            "file into one of those directories."
+        )
+        self._hint_box.set_visible(not self._models)
+
+    def _effective_search_paths(self) -> list[Path]:
+        """Every folder models are searched in, user folders included."""
+        return model_search_paths(self._model_dirs)
+
     def model_available(self, name: str) -> bool:
         """True when a model called `name` is already in the dropdown."""
         return any(model_display_name(model) == name for model in self._models)
 
+    def model_path(self, name: str) -> Path | None:
+        """The file behind a model name, or None when it is not installed."""
+        for model in self._models:
+            if model_display_name(model) == name:
+                return model
+        return None
+
     def _reload_models(self, select: str | None = None) -> None:
         """Re-read the model search paths and rebuild the dropdown.
 
-        Runs after a download so a freshly fetched model appears immediately,
-        without restarting the app.
+        Runs after a download or a deletion, and after a model folder was added
+        or removed, so the list follows the disk immediately instead of at the
+        next start.
         """
         if select is None:
             current = self.model_row.get_selected()
@@ -512,7 +592,7 @@ class SheptWindow(Adw.ApplicationWindow):
         if select is None:
             select = "large-v3-turbo"
 
-        self._models = discover_models()
+        self._models = discover_models(self._model_dirs)
         strings = Gtk.StringList()
         if self._models:
             for model in self._models:
@@ -529,8 +609,55 @@ class SheptWindow(Adw.ApplicationWindow):
                     break
             self.model_row.set_selected(index)
 
-        self._hint_box.set_visible(not self._models)
+        self._update_models_hint()
         self._update_run_state()
+
+    # ----------------------------------------------------------- model folders
+
+    def user_model_dirs(self) -> list[Path]:
+        """The folders the user added in the model manager, in their order."""
+        return list(self._model_dirs)
+
+    def add_model_dir(self, path: Path) -> bool:
+        """Search `path` from now on; False when it is already searched."""
+        path = Path(path).expanduser()
+        if not path.is_absolute() or path in self._model_dirs:
+            return False
+        self._model_dirs.append(path)
+        self._save_settings()
+        self._reload_models()
+        return True
+
+    def remove_model_dir(self, path: Path) -> bool:
+        """Stop searching `path`; False when it was not a user folder."""
+        path = Path(path)
+        if path not in self._model_dirs:
+            return False
+        self._model_dirs = [item for item in self._model_dirs if item != path]
+        self._save_settings()
+        self._reload_models()
+        return True
+
+    def on_model_deleted(self, path: Path) -> None:
+        """Refresh the dropdown after the manager removed a model file.
+
+        A deletion that hits the selected model leaves nothing selected, which
+        would make Transcribe useless until the user picks another one, so the
+        next best model is selected instead — and when no model is left the
+        window falls back to its "no models" state, hint included.
+        """
+        name = model_display_name(path)
+        current = self._selected_model()
+        if current is not None and model_display_name(current) == name:
+            remaining = [
+                model_display_name(model)
+                for model in self._models
+                if model_display_name(model) != name
+            ]
+            select = pick_model_after_delete(remaining, name)
+        else:
+            select = model_display_name(current) if current is not None else None
+        self._reload_models(select=select)
 
     def _on_manage_models(self, _btn: Gtk.Button) -> None:
         if self._model_dialog is not None:
@@ -837,7 +964,7 @@ class SheptWindow(Adw.ApplicationWindow):
             # The asset disappeared while the app was running (a cleanup, an
             # uninstall): re-resolve instead of handing a stale path to the
             # next run, and fall back to the download hint when it is gone.
-            self._vad_model = find_vad_model()
+            self._vad_model = find_vad_model(self._model_dirs)
             if self._vad_model is None:
                 self._set_vad_state(VadState.MISSING)
                 self.status.set_text(
@@ -1347,7 +1474,7 @@ def state_text(job: Job) -> str:
 
 
 class ModelDownloadDialog(Adw.Window):
-    """Download models from HuggingFace into the user's data directory.
+    """Download and delete models, and manage the folders they are read from.
 
     Downloads run on a worker thread; every widget update is bounced back to
     the main loop with `GLib.idle_add`, because GTK is not thread-safe.
@@ -1355,7 +1482,7 @@ class ModelDownloadDialog(Adw.Window):
 
     def __init__(self, parent: SheptWindow) -> None:
         super().__init__(transient_for=parent, modal=True, title="Whisper models")
-        self.set_default_size(560, 640)
+        self.set_default_size(560, 700)
 
         self._parent = parent
         self._dest = download_dir()
@@ -1363,9 +1490,12 @@ class ModelDownloadDialog(Adw.Window):
         self._active: ModelSpec | None = None
         self._thread: threading.Thread | None = None
         self._closed = False
-        #: spec name -> its row, progress bar and the suffix widget currently
-        #: in use (a download/cancel button or the "installed" check mark).
+        #: spec name -> its row, progress bar, the suffix widget currently in
+        #: use (a button or the "installed" group) and the delete control
+        #: inside that group (a trash button, or a lock when it is read-only).
         self._entries: dict[str, dict[str, Gtk.Widget | None]] = {}
+        #: The rows of the "Model folders" group, rebuilt on every change.
+        self._folder_rows: list[Adw.ActionRow] = []
         self.connect("close-request", self._on_close_request)
 
         toolbar = Adw.ToolbarView()
@@ -1389,14 +1519,33 @@ class ModelDownloadDialog(Adw.Window):
         clamp = Adw.Clamp(maximum_size=760)
         scroller.set_child(clamp)
 
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        clamp.set_child(content)
+
         self._group = Adw.PreferencesGroup(
             title="Available models",
             description=f"Downloads are saved to {abbreviate_home(self._dest)}",
         )
-        clamp.set_child(self._group)
+        content.append(self._group)
+
+        self._folders_group = Adw.PreferencesGroup(
+            title="Model folders",
+            description=(
+                "Shept looks for ggml-*.bin files in these folders, in this "
+                "order. Folders you add are remembered between runs."
+            ),
+        )
+        add_btn = Gtk.Button(label="Add folder…")
+        add_btn.add_css_class("flat")
+        add_btn.set_valign(Gtk.Align.CENTER)
+        add_btn.set_tooltip_text("Search another folder for ggml-*.bin models")
+        add_btn.connect("clicked", self._on_add_folder)
+        self._folders_group.set_header_suffix(add_btn)
+        content.append(self._folders_group)
 
         for spec in CATALOG:
             self._add_entry(spec)
+        self._rebuild_folders()
 
     # ---------------------------------------------------------------- widgets
 
@@ -1415,6 +1564,7 @@ class ModelDownloadDialog(Adw.Window):
             "row": row,
             "progress": progress,
             "action": None,
+            "delete": None,
         }
         self._refresh_entry(spec)
 
@@ -1426,6 +1576,7 @@ class ModelDownloadDialog(Adw.Window):
         if action is not None:
             row.remove(action)
         entry["action"] = None
+        entry["delete"] = None
 
         progress = entry["progress"]
         assert isinstance(progress, Gtk.ProgressBar)
@@ -1440,14 +1591,23 @@ class ModelDownloadDialog(Adw.Window):
             entry["action"] = cancel_btn
             return
 
-        if is_downloaded(spec, self._dest) or self._parent.model_available(spec.name):
-            installed = Gtk.Box(spacing=6)
+        path = self._parent.model_path(spec.name)
+        installed = is_downloaded(spec, self._dest) or path is not None
+        if installed:
+            box = Gtk.Box(spacing=6)
             check = Gtk.Image.new_from_icon_name("object-select-symbolic")
-            installed.append(check)
-            installed.append(Gtk.Label(label="Installed"))
-            installed.set_tooltip_text("This model is already available")
-            row.add_suffix(installed)
-            entry["action"] = installed
+            box.append(check)
+            box.append(Gtk.Label(label="Installed"))
+            delete: Gtk.Widget | None = None
+            if path is not None:
+                delete = self._delete_widget(path)
+                box.append(delete)
+            box.set_tooltip_text(
+                str(path) if path is not None else "This model is already available"
+            )
+            row.add_suffix(box)
+            entry["action"] = box
+            entry["delete"] = delete
             return
 
         download_btn = Gtk.Button(label="Download")
@@ -1457,9 +1617,128 @@ class ModelDownloadDialog(Adw.Window):
         row.add_suffix(download_btn)
         entry["action"] = download_btn
 
+    def _delete_widget(self, path: Path) -> Gtk.Widget:
+        """A trash button for `path`, or a lock when the file cannot go.
+
+        A dead button would be worse than none: a read-only folder gets an icon
+        that explains itself, so the row does not look broken.
+        """
+        if not is_deletable(path):
+            lock = Gtk.Image.new_from_icon_name("changes-prevent-symbolic")
+            lock.add_css_class("dim-label")
+            lock.set_valign(Gtk.Align.CENTER)
+            lock.set_tooltip_text(READ_ONLY_TOOLTIP)
+            return lock
+        running = self._parent.queue.is_running
+        button = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+        button.add_css_class("flat")
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_sensitive(not running)
+        button.set_tooltip_text(
+            "Stop the queue before deleting a model"
+            if running
+            else f"Delete {path.name}"
+        )
+        button.connect("clicked", lambda _btn, p=path: self._confirm_delete(p))
+        return button
+
     def _refresh_entries(self) -> None:
         for spec in CATALOG:
             self._refresh_entry(spec)
+
+    # ---------------------------------------------------------- model folders
+
+    def _rebuild_folders(self) -> None:
+        """List the effective search paths, with a remove button for ours."""
+        for row in self._folder_rows:
+            self._folders_group.remove(row)
+        self._folder_rows = []
+        for path, origin in model_search_origins(self._parent.user_model_dirs()):
+            row = Adw.ActionRow(title=abbreviate_home(path), subtitle=origin)
+            row.set_tooltip_text(str(path))
+            if origin == ORIGIN_USER:
+                remove = Gtk.Button.new_from_icon_name("list-remove-symbolic")
+                remove.add_css_class("flat")
+                remove.set_valign(Gtk.Align.CENTER)
+                remove.set_tooltip_text("Stop searching this folder")
+                remove.connect(
+                    "clicked", lambda _btn, p=path: self._on_remove_folder(p)
+                )
+                row.add_suffix(remove)
+            self._folders_group.add(row)
+            self._folder_rows.append(row)
+
+    def _on_add_folder(self, _btn: Gtk.Button) -> None:
+        dialog = Gtk.FileDialog(title="Add a model folder")
+        dialog.select_folder(self, None, self._on_folder_chosen)
+
+    def _on_folder_chosen(
+        self, dialog: Gtk.FileDialog, result: Gio.AsyncResult
+    ) -> None:
+        try:
+            folder = dialog.select_folder_finish(result)
+        except GLib.Error:
+            return
+        path_str = folder.get_path()
+        if path_str is None:
+            return
+        path = Path(path_str)
+        if self._parent.add_model_dir(path):
+            self._set_message(f"Now searching {abbreviate_home(path)}.", error=False)
+        else:
+            self._set_message(
+                f"{abbreviate_home(path)} is already searched.", error=False
+            )
+        self._rebuild_folders()
+        self._refresh_entries()
+
+    def _on_remove_folder(self, path: Path) -> None:
+        if self._parent.remove_model_dir(path):
+            self._set_message(
+                f"Stopped searching {abbreviate_home(path)}.", error=False
+            )
+        self._rebuild_folders()
+        self._refresh_entries()
+
+    # ---------------------------------------------------------------- deleting
+
+    def _confirm_delete(self, path: Path) -> None:
+        """Ask before removing a model file, naming it and its size."""
+        if self._parent.queue.is_running:
+            self._set_message("Stop the queue before deleting a model.")
+            return
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            self._set_message(f"Could not read {path.name}: {exc}")
+            return
+        body = (
+            f"{path.name} ({human_size(size)}) will be removed from "
+            f"{abbreviate_home(path.parent)}. This cannot be undone."
+        )
+        confirm_destructive(
+            self,
+            f"Delete {path.name}?",
+            body,
+            "Delete",
+            lambda: self._remove_model(path),
+        )
+
+    def _remove_model(self, path: Path) -> None:
+        """Delete one model file and keep the window and the dialog in step."""
+        name = model_display_name(path)
+        try:
+            delete_model(path)
+        except OSError as exc:
+            # A read-only folder that looked writable, a file owned by another
+            # user: the row stays and says why, nothing is half-removed.
+            self._set_message(f"Could not delete {name}: {exc}")
+            self._parent.status.set_text(f"Could not delete model {name}: {exc}")
+            self._refresh_entries()
+            return
+        self._set_message(f"Deleted {name}.", error=False)
+        self._parent.on_model_deleted(path)
+        self._refresh_entries()
 
     def _set_message(self, text: str, error: bool = True) -> None:
         self._message.set_text(text)

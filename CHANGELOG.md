@@ -10,6 +10,20 @@ and this project adheres to
 
 ### Added
 
+- **Delete models from the app**: every installed model in the **Manage…**
+  window gets a trash button, shown only where the file is genuinely removable
+  (the directory must be writable). Read-only locations — system directories,
+  and `~/.local/share/whisper-cpp/models` inside the Flatpak sandbox — show a
+  lock instead of a button that could only fail. Deletion asks first, is
+  disabled while the queue runs, unlinks a symlink rather than its target, and
+  the dropdown falls back to `large-v3-turbo` or the next model when the
+  selected one is removed.
+- **Your own model folders**: the **Manage…** window now lists every directory
+  Shept searches, labelled by origin, with **Add folder…** and a remove button
+  for the ones you added. Extra folders are persisted in `settings.json`,
+  searched ahead of the default locations, and picked up immediately without a
+  restart. Removing one stops the search and leaves the files alone.
+
 - **Every language whisper.cpp knows**: the source language list is no
   longer eight hand-picked entries but all 100 languages and dialects
   whisper.cpp v1.8.4 supports, taken from the `g_lang` table in

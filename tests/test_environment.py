@@ -256,6 +256,114 @@ def test_discover_models_empty_when_nothing_found(tmp_path, monkeypatch):
     assert environment.discover_models() == []
 
 
+# ----------------------------------------------- user-configured model folders
+
+
+def test_model_search_paths_extra_comes_after_the_override(fake_home, monkeypatch):
+    monkeypatch.setenv("SHEPT_MODEL_DIR", "/opt/models")
+
+    paths = environment.model_search_paths([Path("/srv/one"), Path("/srv/two")])
+
+    assert paths[:3] == [
+        Path("/opt/models"),
+        Path("/srv/one"),
+        Path("/srv/two"),
+    ]
+    assert paths[3] == fake_home / ".local" / "share" / "shept" / "models"
+
+
+def test_model_search_paths_extra_keeps_the_users_order(fake_home):
+    extras = [Path("/srv/zebra"), Path("/srv/alpha"), Path("/srv/middle")]
+
+    paths = environment.model_search_paths(extras)
+
+    assert paths[:3] == extras
+
+
+def test_model_search_paths_expands_tilde_in_extras(fake_home):
+    paths = environment.model_search_paths([Path("~/whisper-models")])
+
+    assert paths[0] == fake_home / "whisper-models"
+
+
+def test_model_search_paths_deduplicates_identical_extras(fake_home):
+    paths = environment.model_search_paths([Path("/srv/models"), Path("/srv/models/")])
+
+    assert paths.count(Path("/srv/models")) == 1
+    assert len(paths) == len(set(paths))
+
+
+def test_model_search_paths_extra_equal_to_a_default_keeps_the_extra_position(
+    fake_home,
+):
+    default = fake_home / ".local" / "share" / "whisper-cpp" / "models"
+
+    paths = environment.model_search_paths([default])
+
+    assert paths[0] == default
+    assert paths.count(default) == 1
+
+
+def test_model_search_origins_labels_every_source(fake_home, monkeypatch):
+    monkeypatch.setenv("SHEPT_MODEL_DIR", "/opt/models")
+
+    origins = environment.model_search_origins([Path("/srv/models")])
+
+    assert origins[0] == (Path("/opt/models"), environment.ORIGIN_ENV)
+    assert origins[1] == (Path("/srv/models"), environment.ORIGIN_USER)
+    assert (
+        fake_home / ".local" / "share" / "shept" / "models",
+        environment.ORIGIN_DEFAULT,
+    ) in origins
+    assert (Path("/usr/share/whisper-cpp/models"), environment.ORIGIN_SYSTEM) in origins
+    assert len(origins) == len(environment.model_search_paths([Path("/srv/models")]))
+
+
+def test_model_search_origins_deduplicates(fake_home):
+    default = fake_home / ".local" / "share" / "shept" / "models"
+
+    origins = environment.model_search_origins([default, default])
+
+    paths = [path for path, _origin in origins]
+    assert paths.count(default) == 1
+    # The first, more specific reason wins: the user added it on purpose.
+    assert dict(origins)[default] == environment.ORIGIN_USER
+
+
+def test_discover_models_sees_a_model_in_an_added_folder(fake_home, tmp_path):
+    added = tmp_path / "added"
+    added.mkdir()
+    model = _make_model(added / "ggml-medium.bin")
+
+    assert environment.discover_models([added]) == [model]
+    assert environment.discover_models() == []
+
+
+def test_discover_models_prefers_an_added_folder_over_a_default_one(
+    fake_home, tmp_path, monkeypatch
+):
+    added = tmp_path / "added"
+    added.mkdir()
+    default = fake_home / ".local" / "share" / "shept" / "models"
+    default.mkdir(parents=True)
+    preferred = _make_model(added / "ggml-small.bin")
+    _make_model(default / "ggml-small.bin")
+
+    assert environment.discover_models([added]) == [preferred]
+
+
+def test_find_vad_model_searches_an_added_folder(fake_home, tmp_path):
+    added = tmp_path / "added"
+    added.mkdir()
+    vad = added / VAD_SPEC.filename
+    vad.write_bytes(b"")
+    with vad.open("rb+") as handle:
+        handle.truncate(VAD_SPEC.size_bytes)
+
+    assert environment.find_vad_model([added]) == vad
+    assert environment.find_vad_model() is None
+
+
 # -------------------------------------------------------------------- distro
 
 

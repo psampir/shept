@@ -139,11 +139,12 @@ Models are **not bundled** with Shept. Drop one (or more) `ggml-*.bin` files
 into any of the directories Shept searches, in this order:
 
 1. `$SHEPT_MODEL_DIR` — set this to keep models somewhere else entirely
-2. `$XDG_DATA_HOME/shept/models` (`~/.local/share/shept/models`)
-3. `$XDG_DATA_HOME/whisper-cpp/models` — whisper.cpp's own convention
-4. `~/.cache/whisper.cpp/models` — older upstream default
-5. `/usr/share/whisper-cpp/models`
-6. `/usr/local/share/whisper-cpp/models`
+2. **folders you added in the app** — see [Adding your own folders](#adding-your-own-folders)
+3. `$XDG_DATA_HOME/shept/models` (`~/.local/share/shept/models`)
+4. `$XDG_DATA_HOME/whisper-cpp/models` — whisper.cpp's own convention
+5. `~/.cache/whisper.cpp/models` — older upstream default
+6. `/usr/share/whisper-cpp/models`
+7. `/usr/local/share/whisper-cpp/models`
 
 Every `ggml-*.bin` file found in those directories shows up in the model
 dropdown; if the same model exists in several places, the first directory wins.
@@ -169,6 +170,35 @@ dropdown; the partial file is deleted on failure or cancellation, and any
 leftover from an earlier crash is removed the next time the folder is opened.
 There is no checksum to verify against — HuggingFace does not publish per-file
 hashes — so Shept only checks the downloaded size against the published one.
+
+### Adding your own folders
+
+The same **Manage…** window lists every directory Shept searches, labelled with
+why it is searched (`SHEPT_MODEL_DIR`, *Added by you*, *Default*, *System*).
+Press **Add folder…** to point Shept at models kept elsewhere — an external
+drive, a shared network folder, a hand-curated collection. Folders you add are
+saved to `settings.json`, keep their order, and are searched before the default
+locations, so adding one is enough to make its models win over a duplicate
+elsewhere. Removing a folder only stops Shept from looking there; the files stay
+untouched.
+
+Inside the Flatpak sandbox only paths under your home directory are visible,
+because the manifest grants `home:ro`. A folder such as `/mnt/disk/models` needs
+an explicit grant:
+
+```bash
+flatpak override --user --filesystem=/mnt/disk/models io.github.psampir.Shept
+```
+
+### Deleting models
+
+Each installed model in **Manage…** has a trash button, but only where Shept can
+actually remove the file: the containing directory has to be writable. Models in
+`~/.local/share/whisper-cpp/models` or `/usr/share/whisper-cpp/models` are
+read-only inside the Flatpak, so those rows show a lock instead — deleting them
+there would only fail, and Shept says so up front rather than after the fact.
+Deletion is disabled while the queue is running, asks for confirmation, and
+removes a symlink rather than the file it points to.
 
 Recommended: **`large-v3-turbo`** (~1.62 GB, f16) — the best accuracy/speed
 balance for most languages, including non-English ones.

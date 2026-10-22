@@ -1,4 +1,4 @@
-"""Persisted user settings: transcription model, language, silence handling.
+"""Persisted user settings: model, language, silence handling, model folders.
 
 GTK-free on purpose: this module is imported by `shept.app` but is also the
 subject of unit tests that run without PyGObject installed. Reading is
@@ -44,6 +44,30 @@ def _favourites(value: object) -> list[str]:
     return codes
 
 
+def _model_dirs(value: object) -> list[str]:
+    """Tolerant reader for the extra model folders, as absolute paths.
+
+    A folder Shept cannot search is worse than no folder at all, so anything
+    that would silently resolve elsewhere is dropped: a value that is not a
+    list, a non-string entry, an empty string, a relative path. `~` is expanded
+    first, because that is the one relative spelling with a useful meaning.
+    Order is the user's, and the first occurrence of a duplicate wins.
+    """
+    if not isinstance(value, list):
+        return []
+    dirs: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        path = Path(item.strip()).expanduser()
+        if not path.is_absolute():
+            continue
+        text = str(path)
+        if text not in dirs:
+            dirs.append(text)
+    return dirs
+
+
 @dataclass
 class Settings:
     """Everything Shept remembers between runs.
@@ -58,6 +82,9 @@ class Settings:
     #: Language codes the picker shows first, in the order the user starred
     #: them. Kept as a plain list so the order survives a save/load round trip.
     favourites: list[str] = field(default_factory=list)
+    #: Extra model folders the user added in the model manager, in their order.
+    #: Stored as strings so the JSON stays readable and hand-editable.
+    model_dirs: list[str] = field(default_factory=list)
 
 
 def settings_path() -> Path:
@@ -97,6 +124,7 @@ def load(path: Path | None = None) -> Settings:
         ),
         skip_silence=skip_silence if isinstance(skip_silence, bool) else False,
         favourites=_favourites(raw.get("favourites")),
+        model_dirs=_model_dirs(raw.get("model_dirs")),
     )
 
 
@@ -117,6 +145,7 @@ def save(settings: Settings, path: Path | None = None) -> Path:
         "language": settings.language,
         "skip_silence": settings.skip_silence,
         "favourites": list(settings.favourites),
+        "model_dirs": list(settings.model_dirs),
     }
     try:
         with tmp.open("w", encoding="utf-8") as handle:
