@@ -7,10 +7,14 @@ library is used, so importing it adds no dependency to the app's start-up path.
 
 from __future__ import annotations
 
+import errno
 import os
+import socket
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
@@ -114,6 +118,126 @@ def human_size(size_bytes: int) -> str:
     if size_bytes >= 1_000_000:
         return f"{size_bytes / 1_000_000:.0f} MB"
     return f"{size_bytes / 1_000:.0f} kB"
+
+
+# ------------------------------------------------------- download failure text
+
+#: The short reasons `describe_download_error` maps to. They are constants so
+#: callers can compare against them without duplicating the wording.
+NO_NETWORK_REASON = "no network connection"
+NO_RESPONSE_REASON = "the server did not respond"
+NO_SPACE_REASON = "not enough disk space"
+
+
+def _root_cause(exc: BaseException) -> BaseException:
+    """Follow `__cause__` to the exception that actually went wrong."""
+    seen: set[int] = set()
+    current = exc
+    while isinstance(current.__cause__, BaseException):
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        current = current.__cause__
+    return current
+
+
+def _is_name_resolution(exc: BaseException) -> bool:
+    """True for a DNS failure, whether it arrives bare or as a URL error."""
+    reason = getattr(exc, "reason", None)
+    return isinstance(exc, socket.gaierror) or isinstance(reason, socket.gaierror)
+
+
+def _is_timeout(exc: BaseException | None) -> bool:
+    """`socket.timeout` is `TimeoutError` since Python 3.10."""
+    return isinstance(exc, TimeoutError)
+
+
+def describe_download_error(exc: BaseException) -> str:
+    """One short sentence explaining a failed download, for the UI row.
+
+    `download()` wraps the useful exception in a `DownloadError`, so the cause
+    chain is unwrapped first. The message is deliberately not `str(exc)`: that
+    can be a mangled URL or a locale-dependent errno string. Callers keep the
+    raw text for the status bar and the tooltip, where debugging detail fits.
+    """
+    cause = _root_cause(exc)
+    text = str(cause).lower()
+    if isinstance(cause, HTTPError):
+        return f"the server returned HTTP {cause.code}"
+    if _is_name_resolution(cause) or "name resolution" in text:
+        return NO_NETWORK_REASON
+    if _is_timeout(cause) or _is_timeout(getattr(cause, "reason", None)):
+        return NO_RESPONSE_REASON
+    if "timed out" in text:
+        return NO_RESPONSE_REASON
+    if isinstance(cause, OSError) and cause.errno == errno.ENOSPC:
+        return NO_SPACE_REASON
+    return type(cause).__name__
+
+
+def download_error_tooltip(exc: BaseException) -> str:
+    """Tooltip text for a failed download: the raw message plus a hint.
+
+    The Flatpak remark belongs here rather than in the row: the row holds one
+    line for every user, the tooltip is for whoever reports the bug.
+    """
+    tooltip = str(exc) or type(exc).__name__
+    if describe_download_error(exc) == NO_NETWORK_REASON:
+        tooltip += (
+            "\nInside the Flatpak sandbox this usually means the app has no "
+            "network access (the manifest needs --share=network)."
+        )
+    return tooltip
+
+
+# --------------------------------------------------------- VAD hint row state
+
+
+class VadState(Enum):
+    """The states the Silero VAD hint row can be in.
+
+    `MISSING` and `FAILED` both offer the download, `DOWNLOADING` shows its
+    progress and `INSTALLED` hides the row. The app applies them through one
+    method, so the row can never mix, say, a failure subtitle with an idle
+    button.
+    """
+
+    MISSING = "missing"
+    DOWNLOADING = "downloading"
+    FAILED = "failed"
+    INSTALLED = "installed"
+
+
+def vad_state_text(
+    state: VadState,
+    detail: str = "",
+    size_bytes: int = VAD_SPEC.size_bytes,
+) -> tuple[str, str, str]:
+    """Title, subtitle and button label for one state of the VAD hint row.
+
+    `detail` is the progress text (`42%` or `512 kB`) for `DOWNLOADING` and the
+    friendly reason from `describe_download_error` for `FAILED`.
+    """
+    if state is VadState.INSTALLED:
+        return "Silero VAD is installed", "", ""
+    title = "Silero VAD is not installed"
+    if state is VadState.MISSING:
+        return (
+            title,
+            f"Download it ({human_size(size_bytes)}) to skip silence.",
+            "Download",
+        )
+    if state is VadState.DOWNLOADING:
+        subtitle = (
+            f"Downloading Silero VAD — {detail}"
+            if detail
+            else f"Downloading Silero VAD ({human_size(size_bytes)})…"
+        )
+        return title, subtitle, "Downloading…"
+    if state is VadState.FAILED:
+        subtitle = f"Download failed — {detail}." if detail else "Download failed."
+        return title, subtitle, "Retry"
+    raise ValueError(f"unknown VAD state: {state!r}")
 
 
 def download_dir() -> Path:

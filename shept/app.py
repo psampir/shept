@@ -45,10 +45,14 @@ from shept.models import (  # noqa: E402
     VAD_SPEC,
     DownloadCancelled,
     ModelSpec,
+    VadState,
+    describe_download_error,
     download,
     download_dir,
+    download_error_tooltip,
     human_size,
     is_downloaded,
+    vad_state_text,
 )
 from shept.queue import Job, JobState, Queue, export_all  # noqa: E402
 from shept.settings import Settings  # noqa: E402
@@ -124,6 +128,8 @@ class SheptWindow(Adw.ApplicationWindow):
         #: Set while the switch is being moved from code, so the toggle handler
         #: does not mistake a revert for a user choice.
         self._suppress_vad = False
+        #: The VAD hint row's state. `_set_vad_state` is the only writer.
+        self._vad_state = VadState.MISSING
         self._missing_tools = [
             name for name in REQUIRED_TOOLS if shutil.which(name) is None
         ]
@@ -275,21 +281,19 @@ class SheptWindow(Adw.ApplicationWindow):
             title="Skip silence",
             subtitle="Drop silent stretches so whisper cannot invent text over them",
         )
-        self.vad_row.set_active(default_skip_silence(self._vad_model))
         group.add(self.vad_row)
 
-        self.vad_hint = Adw.ActionRow(
-            title="Silero VAD is not installed",
-            subtitle=(
-                f"Download it ({human_size(VAD_SPEC.size_bytes)}) to skip silence."
-            ),
-        )
-        self.vad_download_btn = Gtk.Button(label="Download")
+        self.vad_hint = Adw.ActionRow()
+        self.vad_download_btn = Gtk.Button()
         self.vad_download_btn.set_valign(Gtk.Align.CENTER)
         self.vad_download_btn.connect("clicked", self._on_vad_download)
         self.vad_hint.add_suffix(self.vad_download_btn)
-        self.vad_hint.set_visible(False)
         group.add(self.vad_hint)
+        # Everything the row shows comes from the state machine below, so the
+        # initial appearance cannot drift from the later ones.
+        self._set_vad_state(
+            VadState.INSTALLED if self._vad_model is not None else VadState.MISSING
+        )
 
         self.run_btn = Gtk.Button(label="Transcribe")
         self.run_btn.add_css_class("suggested-action")
@@ -720,15 +724,43 @@ class SheptWindow(Adw.ApplicationWindow):
 
     # ---------------------------------------------------------------- silence
 
+    def _set_vad_state(
+        self, state: VadState, detail: str = "", tooltip: str = ""
+    ) -> None:
+        """Apply `state` to the whole VAD hint row at once.
+
+        Every widget of the row is written here and nowhere else: title,
+        subtitle, tooltip, visibility, button label and sensitivity, and the
+        switch. A caller that changes one of them by hand is what let a failed
+        download keep its "Downloading…" subtitle. `detail` is the progress
+        text for `DOWNLOADING` and the friendly reason for `FAILED`; `tooltip`
+        carries the raw error, which stays out of the row.
+        """
+        self._vad_state = state
+        title, subtitle, label = vad_state_text(state, detail, VAD_SPEC.size_bytes)
+        self.vad_hint.set_title(title)
+        self.vad_hint.set_subtitle(subtitle)
+        self.vad_hint.set_tooltip_text(tooltip or None)
+        self.vad_hint.set_visible(state is not VadState.INSTALLED)
+        self.vad_download_btn.set_label(label)
+        self.vad_download_btn.set_sensitive(
+            state in (VadState.MISSING, VadState.FAILED)
+        )
+        # Toggling the switch mid-download could only re-pop the same hint, and
+        # the switch may stay on only when the asset is actually there.
+        self.vad_row.set_sensitive(state is not VadState.DOWNLOADING)
+        self._suppress_vad = True
+        self.vad_row.set_active(state is VadState.INSTALLED)
+        self._suppress_vad = False
+
     def _on_vad_toggled(self, row: Adw.SwitchRow, _pspec: object) -> None:
         """Refuse to switch VAD on without its model, and point at the download."""
         if self._suppress_vad:
             return
         if row.get_active() and self._vad_model is None:
-            self._suppress_vad = True
-            row.set_active(False)
-            self._suppress_vad = False
-            self.vad_hint.set_visible(True)
+            # Re-applying the current state puts the row back exactly as it
+            # was: switch off, hint visible, and a failure message intact.
+            self._set_vad_state(self._vad_state)
             self.status.set_text(
                 "Silero VAD is not installed — press Download to fetch it."
             )
@@ -737,11 +769,10 @@ class SheptWindow(Adw.ApplicationWindow):
 
     def _on_vad_download(self, _btn: Gtk.Button) -> None:
         """Fetch the Silero VAD asset — only when the user asks for it."""
-        if self._vad_model is not None:
+        if self._vad_model is not None or self._vad_state is VadState.DOWNLOADING:
             return
-        self.vad_download_btn.set_sensitive(False)
-        self.vad_download_btn.set_label("Downloading…")
-        self.vad_hint.set_subtitle(
+        self._set_vad_state(VadState.DOWNLOADING)
+        self.status.set_text(
             f"Downloading Silero VAD ({human_size(VAD_SPEC.size_bytes)})…"
         )
         threading.Thread(
@@ -759,39 +790,47 @@ class SheptWindow(Adw.ApplicationWindow):
                 is_cancelled=lambda: self._closing,
             )
         except Exception as exc:  # reported in the row, never crashes
-            message = str(exc) or exc.__class__.__name__
-            self._idle(self._vad_download_done, None, message)
+            self._idle(self._vad_download_done, None, exc)
         else:
-            self._idle(self._vad_download_done, path, "")
+            self._idle(self._vad_download_done, path, None)
 
     def _vad_download_progress(self, received: int, total: int) -> None:
         """Called from the download thread; hops back to the main loop."""
         self._idle(self._vad_download_progress_ui, received, total)
 
     def _vad_download_progress_ui(self, received: int, total: int) -> bool:
-        if self._closing:
+        if self._closing or self._vad_state is not VadState.DOWNLOADING:
             return False
         if total > 0:
-            percent = int(received * 100 / total)
-            self.vad_hint.set_subtitle(f"Downloading Silero VAD — {percent}%")
+            detail = f"{int(received * 100 / total)}%"
         else:
-            self.vad_hint.set_subtitle(
-                f"Downloading Silero VAD — {human_size(received)}"
-            )
+            detail = human_size(received)
+        self._set_vad_state(VadState.DOWNLOADING, detail)
         return False
 
-    def _vad_download_done(self, path: Path | None, error: str) -> bool:
+    def _vad_download_done(
+        self, path: Path | None, error: BaseException | None
+    ) -> bool:
         if self._closing:
             return False
-        self.vad_download_btn.set_label("Download")
-        self.vad_download_btn.set_sensitive(True)
         if path is None:
-            self.vad_hint.set_subtitle(f"Download failed: {error}")
-            self.status.set_text(f"Silero VAD download failed: {error}")
+            if error is None:
+                self._set_vad_state(VadState.FAILED)
+                self.status.set_text("Silero VAD download failed.")
+                return False
+            self._set_vad_state(
+                VadState.FAILED,
+                describe_download_error(error),
+                download_error_tooltip(error),
+            )
+            # The raw message stays in the status bar: the row gets the short
+            # reason, the log gets something worth pasting into a bug report.
+            self.status.set_text(
+                f"Silero VAD download failed: {str(error) or type(error).__name__}"
+            )
             return False
         self._vad_model = path
-        self.vad_hint.set_visible(False)
-        self.vad_row.set_active(True)
+        self._set_vad_state(VadState.INSTALLED)
         self.status.set_text("Silero VAD downloaded — silence will be skipped.")
         return False
 

@@ -6,21 +6,32 @@ replaced by a fake that serves a small payload in chunks.
 
 from __future__ import annotations
 
+import errno
 import io
+import socket
+from urllib.error import HTTPError, URLError
 
 import pytest
 
 from shept import models
 from shept.models import (
     CATALOG,
+    NO_NETWORK_REASON,
+    NO_RESPONSE_REASON,
+    NO_SPACE_REASON,
     SIZE_TOLERANCE,
+    VAD_SPEC,
     DownloadCancelled,
     DownloadError,
     ModelSpec,
+    VadState,
+    describe_download_error,
     download,
     download_dir,
+    download_error_tooltip,
     human_size,
     is_downloaded,
+    vad_state_text,
 )
 
 PAYLOAD = bytes(range(256)) * 3
@@ -361,3 +372,157 @@ def test_is_downloaded_ignores_part_files(dest):
     (dest / (SPEC.filename + ".part")).write_bytes(PAYLOAD)
 
     assert is_downloaded(SPEC, dest) is False
+
+
+# ------------------------------------------------ friendly download failures
+
+
+def _dns_failure() -> socket.gaierror:
+    return socket.gaierror(-3, "Temporary failure in name resolution")
+
+
+def test_describe_download_error_name_resolution_keeps_the_row_short():
+    assert describe_download_error(_dns_failure()) == NO_NETWORK_REASON
+
+
+def test_describe_download_error_url_error_wrapping_name_resolution():
+    exc = URLError(_dns_failure())
+
+    assert describe_download_error(exc) == NO_NETWORK_REASON
+
+
+def test_describe_download_error_unwraps_the_downloader_error():
+    """The app sees a `DownloadError`; the useful exception is its cause."""
+    exc = DownloadError(f"Could not download silero-vad: {URLError(_dns_failure())}")
+    exc.__cause__ = URLError(_dns_failure())
+
+    assert describe_download_error(exc) == NO_NETWORK_REASON
+
+
+def test_describe_download_error_never_returns_the_raw_message():
+    result = describe_download_error(URLError(_dns_failure()))
+
+    assert "name resolution" not in result
+    assert "Errno" not in result
+
+
+def test_describe_download_error_timeout():
+    assert describe_download_error(URLError(TimeoutError("timed out"))) == (
+        NO_RESPONSE_REASON
+    )
+
+
+def test_describe_download_error_timeout_without_a_reason_object():
+    assert describe_download_error(URLError("timed out")) == NO_RESPONSE_REASON
+
+
+def test_describe_download_error_http_status():
+    exc = HTTPError("https://example.invalid/model.bin", 404, "Not Found", {}, None)
+
+    assert describe_download_error(exc) == "the server returned HTTP 404"
+
+
+def test_describe_download_error_http_status_is_unwrapped():
+    exc = DownloadError("Could not download silero-vad: HTTP Error 503")
+    exc.__cause__ = HTTPError(
+        "https://example.invalid/model.bin", 503, "Service Unavailable", {}, None
+    )
+
+    assert describe_download_error(exc) == "the server returned HTTP 503"
+
+
+def test_describe_download_error_no_disk_space():
+    exc = OSError(errno.ENOSPC, "No space left on device")
+
+    assert describe_download_error(exc) == NO_SPACE_REASON
+
+
+def test_describe_download_error_no_disk_space_is_unwrapped():
+    exc = DownloadError("Could not download silero-vad: No space left on device")
+    exc.__cause__ = OSError(errno.ENOSPC, "No space left on device")
+
+    assert describe_download_error(exc) == NO_SPACE_REASON
+
+
+def test_describe_download_error_falls_back_to_the_class_name():
+    assert describe_download_error(ValueError("boom")) == "ValueError"
+    assert describe_download_error(DownloadError("truncated")) == "DownloadError"
+
+
+def test_describe_download_error_fallback_names_the_cause_class():
+    exc = DownloadError("Could not download silero-vad: boom")
+    exc.__cause__ = ValueError("boom")
+
+    assert describe_download_error(exc) == "ValueError"
+
+
+def test_download_error_tooltip_keeps_the_raw_message_and_the_sandbox_hint():
+    tooltip = download_error_tooltip(URLError(_dns_failure()))
+
+    assert "name resolution" in tooltip
+    assert "Flatpak" in tooltip
+    assert "--share=network" in tooltip
+
+
+def test_download_error_tooltip_has_no_sandbox_hint_for_other_failures():
+    tooltip = download_error_tooltip(OSError(errno.ENOSPC, "No space left on device"))
+
+    assert "No space left on device" in tooltip
+    assert "Flatpak" not in tooltip
+
+
+# -------------------------------------------------------- VAD hint row states
+
+
+def test_vad_state_text_missing():
+    assert vad_state_text(VadState.MISSING) == (
+        "Silero VAD is not installed",
+        "Download it (885 kB) to skip silence.",
+        "Download",
+    )
+
+
+def test_vad_state_text_missing_uses_the_given_size():
+    assert vad_state_text(VadState.MISSING, size_bytes=1_000_000)[1] == (
+        "Download it (1 MB) to skip silence."
+    )
+
+
+def test_vad_state_text_downloading_percentage():
+    assert vad_state_text(VadState.DOWNLOADING, "42%") == (
+        "Silero VAD is not installed",
+        "Downloading Silero VAD — 42%",
+        "Downloading…",
+    )
+
+
+def test_vad_state_text_downloading_bytes_without_a_content_length():
+    assert vad_state_text(VadState.DOWNLOADING, "512 kB")[1] == (
+        "Downloading Silero VAD — 512 kB"
+    )
+
+
+def test_vad_state_text_downloading_before_the_first_tick():
+    assert vad_state_text(VadState.DOWNLOADING)[1] == (
+        f"Downloading Silero VAD ({human_size(VAD_SPEC.size_bytes)})…"
+    )
+
+
+def test_vad_state_text_failed():
+    assert vad_state_text(VadState.FAILED, NO_NETWORK_REASON) == (
+        "Silero VAD is not installed",
+        "Download failed — no network connection.",
+        "Retry",
+    )
+
+
+def test_vad_state_text_failed_without_a_reason():
+    assert vad_state_text(VadState.FAILED)[1] == "Download failed."
+
+
+def test_vad_state_text_installed():
+    assert vad_state_text(VadState.INSTALLED) == (
+        "Silero VAD is installed",
+        "",
+        "",
+    )
