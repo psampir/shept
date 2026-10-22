@@ -29,7 +29,6 @@
       <li>A batch queue: add many files and transcribe them one after another, with per-file progress</li>
       <li>Streaming output and a progress bar driven by the real timestamps</li>
       <li>Language selection, or automatic detection</li>
-      <li>Optional translation of the result into English</li>
       <li>Export each transcript on its own, or every finished file into one folder</li>
       <li>GPU acceleration through Vulkan when whisper.cpp was built with it</li>
     </ul>

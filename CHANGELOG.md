@@ -42,8 +42,7 @@ First release.
   `/usr/local/share/whisper-cpp/models` — with the first directory winning when
   a model exists in more than one.
 - A language selector that defaults to the system locale when Shept supports
-  that language and to auto-detection otherwise, plus optional translation of
-  the result into English.
+  that language and to auto-detection otherwise.
 - Guidance for missing dependencies: a banner names the tools that are not on
   `PATH` and shows the install command for the detected distribution, and
   **Transcribe** stays disabled until they are available.

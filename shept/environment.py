@@ -9,10 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Iterable
 from pathlib import Path
-
-from shept.models import CATALOG
 
 MODEL_GLOB = "ggml-*.bin"
 MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
@@ -152,44 +149,6 @@ def model_search_paths() -> list[Path]:
 def model_display_name(path: Path) -> str:
     """Turn `ggml-large-v3-turbo.bin` into `large-v3-turbo`."""
     return path.name.removeprefix("ggml-").removesuffix(".bin")
-
-
-def model_translates(path: Path) -> bool:
-    """True when the model behind `path` can translate to English.
-
-    The turbo models were fine-tuned without translation data, so whisper.cpp
-    copies the source text verbatim when they are asked to translate. The
-    check is on the file name rather than the catalogue, because models found
-    on disk are not necessarily the ones Shept can download.
-    """
-    return "turbo" not in Path(path).name.lower()
-
-
-def best_translation_model(installed: Iterable[Path]) -> Path | None:
-    """Return the most recommended installed model that can translate.
-
-    "Most recommended" means first in `CATALOG` order, so the result is the
-    best model to offer as a one-click replacement when the selected one
-    cannot translate. Installed models outside the catalogue are only used
-    when no catalogue entry qualifies, and never for models the catalogue says
-    cannot translate. Returns None when nothing suitable is installed.
-    """
-    by_name: dict[str, Path] = {}
-    for path in installed:
-        by_name.setdefault(model_display_name(path), Path(path))
-
-    for spec in CATALOG:
-        if not spec.translates:
-            continue
-        path = by_name.get(spec.name)
-        if path is not None:
-            return path
-
-    catalogued = {spec.name for spec in CATALOG}
-    for name in sorted(by_name):
-        if name not in catalogued and model_translates(by_name[name]):
-            return by_name[name]
-    return None
 
 
 def abbreviate_home(path: Path) -> str:

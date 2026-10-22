@@ -53,7 +53,6 @@ def build_whisper_cmd(
     wav_path: Path,
     lang: str,
     threads: int,
-    translate: bool,
 ) -> list[str]:
     """Build the whisper-cli argv for transcribing `wav_path`."""
     cmd = [
@@ -67,8 +66,6 @@ def build_whisper_cmd(
         "-f",
         str(wav_path),
     ]
-    if translate:
-        cmd.append("--translate")
     return cmd
 
 

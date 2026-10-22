@@ -162,11 +162,6 @@ Shept only checks the downloaded size against the published one.
 Recommended: **`large-v3-turbo`** (~1.62 GB, f16) — the best accuracy/speed
 balance for most languages, including non-English ones.
 
-The turbo models transcribe only. OpenAI fine-tuned them without translation
-data, so `--translate` copies the source text verbatim instead of translating
-it; use `large-v3`, `medium`, `small`, `base` or `tiny` when you need English
-output from another language.
-
 To download by hand instead:
 
 ```bash
@@ -217,21 +212,17 @@ command.
    Press **Manage…** to download one if the list is empty or you want another.
 3. Pick the source **Language** (defaults to your system locale when Shept
    supports it, otherwise auto-detect)
-4. Optionally toggle **Translate to English** to get an English translation
-   instead of a transcript in the source language. The turbo models cannot
-   translate, so Shept warns under the switch and offers to switch to a model
-   that can when one is installed.
-5. Click **Transcribe all** — the button reads **Transcribe** when exactly one
+4. Click **Transcribe all** — the button reads **Transcribe** when exactly one
    file is waiting. Files are processed one at a time: the active row shows
    `Transcribing…` with its own progress bar, the overall progress bar tracks
    the current file, and finished rows are marked `Done — N segments`.
    **Cancel** abandons the file that is running (it is marked `Cancelled`) and
    leaves the rest pending, so pressing **Transcribe all** again resumes the
    queue where it stopped.
-6. Select a row to read that file's transcript in the text view. The running
+5. Select a row to read that file's transcript in the text view. The running
    file is selected automatically, and switching rows keeps everything that
    was already transcribed — segments stay attached to their file.
-7. Use the toolbar buttons to **copy** the selected transcript as plain text,
+6. Use the toolbar buttons to **copy** the selected transcript as plain text,
    or open the **save** menu:
    - **Selected file** writes that one transcript in the chosen format:
      `.txt` (plain text), `.srt` and `.vtt` (subtitles, with the timestamps
@@ -242,8 +233,16 @@ command.
      as `<file name>.<ext>`, appending ` (2)`, ` (3)` when two files share a
      name. It uses the format you last picked in **Selected file** (plain text
      until you pick one), and skips files that produced no text.
-8. **Clear finished** removes completed, failed and cancelled rows from the
+7. **Clear finished** removes completed, failed and cancelled rows from the
    queue without touching anything on disk.
+
+### Translating a transcript
+
+Shept does not translate. Whisper's built-in translation only produces English
+and is considerably worse than dedicated machine translation. If you need
+another language, export the transcript as subtitles (`.srt`) and translate
+that file with the tool of your choice — DeepL, for instance, accepts `.srt`
+and keeps the timestamps intact.
 
 ### Desktop launcher (optional)
 
@@ -335,12 +334,6 @@ On Debian/Ubuntu, double-check that you built with `-DGGML_VULKAN=1` and that
 **Output is garbled or English-looking for a non-English language** — you are
 probably using a `.en` model. Pick a multilingual one (any model name without
 an `.en` suffix).
-
-**Translate to English returns the original language** — the turbo models
-(`large-v3-turbo`, `large-v3-turbo-q5_0`) were fine-tuned without translation
-data, so they copy the source text when asked to translate. Pick `large-v3`,
-`medium`, `small`, `base` or `tiny` instead; Shept shows the same warning under
-the Translate switch and can switch the model for you.
 
 **Random nonsense at the end of long files** — Whisper sometimes hallucinates
 during silence. Trim trailing silence with ffmpeg (`-af silenceremove`) or

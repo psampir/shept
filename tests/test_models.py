@@ -115,21 +115,6 @@ def test_catalog_orders_large_v3_turbo_first():
     assert CATALOG[0].name == "large-v3-turbo"
 
 
-def test_only_the_turbo_models_cannot_translate():
-    # OpenAI fine-tuned the turbo models without translation data, so
-    # `--translate` copies the source text instead of translating it.
-    incapable = {spec.name for spec in CATALOG if not spec.translates}
-
-    assert incapable == {"large-v3-turbo", "large-v3-turbo-q5_0"}
-
-
-def test_catalog_translation_flags_match_the_filename_rule():
-    # The app decides whether a model found on disk can translate from its
-    # file name alone, so the catalogue must not disagree with that rule.
-    for spec in CATALOG:
-        assert spec.translates is ("turbo" not in spec.name)
-
-
 def test_catalog_sizes_match_the_published_files():
     by_name = {spec.name: spec.size_bytes for spec in CATALOG}
 

@@ -347,7 +347,7 @@ def test_build_whisper_cmd_argv():
     model = Path("/models/ggml-large-v3-turbo.bin")
     wav_path = Path("/tmp/input.wav")
 
-    assert build_whisper_cmd(model, wav_path, "pl", 8, False) == [
+    assert build_whisper_cmd(model, wav_path, "pl", 8) == [
         "whisper-cli",
         "-m",
         "/models/ggml-large-v3-turbo.bin",
@@ -360,22 +360,9 @@ def test_build_whisper_cmd_argv():
     ]
 
 
-def test_build_whisper_cmd_translate_flag():
-    model = Path("/models/ggml-base.bin")
-    wav_path = Path("/tmp/input.wav")
-
-    cmd = build_whisper_cmd(model, wav_path, "de", 4, True)
-
-    assert cmd[-1] == "--translate"
-    assert cmd.count("--translate") == 1
-    assert build_whisper_cmd(model, wav_path, "de", 4, False).count("--translate") == 0
-
-
 @pytest.mark.parametrize("threads", [1, 4, 8])
 def test_build_whisper_cmd_renders_threads_as_string(threads):
-    cmd = build_whisper_cmd(
-        Path("/m/ggml-base.bin"), Path("/tmp/i.wav"), "en", threads, False
-    )
+    cmd = build_whisper_cmd(Path("/m/ggml-base.bin"), Path("/tmp/i.wav"), "en", threads)
 
     assert cmd[cmd.index("-t") + 1] == str(threads)
     assert isinstance(cmd[cmd.index("-t") + 1], str)
@@ -385,7 +372,7 @@ def test_build_whisper_cmd_keeps_paths_with_spaces_intact():
     model = Path("/models/my models/ggml-base.bin")
     wav_path = Path("/tmp/shept work/input.wav")
 
-    cmd = build_whisper_cmd(model, wav_path, "en", 8, False)
+    cmd = build_whisper_cmd(model, wav_path, "en", 8)
 
     assert cmd[cmd.index("-m") + 1] == str(model)
     assert cmd[cmd.index("-f") + 1] == str(wav_path)
