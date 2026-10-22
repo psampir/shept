@@ -39,6 +39,7 @@ command: shept
 finish-args:
   # X11 shared memory (MIT-SHM); without it the X11 path copies every frame.
   - --share=ipc
+  - --share=network
   - --socket=wayland
   - --socket=fallback-x11
   # Vulkan (and any future CUDA/HIP backend) needs the GPU device nodes.

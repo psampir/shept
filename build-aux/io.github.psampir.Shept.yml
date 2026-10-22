@@ -27,6 +27,9 @@ command: shept
 finish-args:
   # X11 shared memory (MIT-SHM); without it the X11 path copies every frame.
   - --share=ipc
+  # The model downloader fetches ggml-* files from Hugging Face. Flatpak does
+  # not grant network access by default, so it has to be declared.
+  - --share=network
   - --socket=wayland
   - --socket=fallback-x11
   # Vulkan (and any future CUDA/HIP backend) needs the GPU device nodes.
