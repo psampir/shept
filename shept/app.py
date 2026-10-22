@@ -72,6 +72,7 @@ from shept.transcribe import (  # noqa: E402
     ms_to_ts,
     parse_progress_line,
     parse_segment,
+    probe_duration,
     read_tail,
     stop_process,
 )
@@ -1066,25 +1067,13 @@ class SheptWindow(Adw.ApplicationWindow):
         if ret != 0:
             raise RuntimeError(f"whisper-cli exited with {ret}")
 
-    @staticmethod
-    def _probe_duration(media: Path) -> float:
-        try:
-            out = subprocess.check_output(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "default=nw=1:nk=1",
-                    str(media),
-                ],
-                text=True,
-            ).strip()
-            return float(out)
-        except Exception:
-            return 0.0
+    def _probe_duration(self, media: Path) -> float:
+        """Bounded, cancellable duration probe (the logic lives in transcribe)."""
+        return probe_duration(media, register=self._register_proc)
+
+    def _register_proc(self, proc: subprocess.Popen[str] | None) -> None:
+        """Publish the running child so Cancel and close can stop it."""
+        self._proc = proc
 
     def _handle_line(self, job: Job, line: str, duration: float) -> None:
         segment = parse_segment(line)

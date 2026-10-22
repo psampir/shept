@@ -25,6 +25,11 @@ STOP_TIMEOUT = 2.0
 #: wait so a stuck kernel state cannot hang the UI thread.
 KILL_TIMEOUT = 1.0
 
+#: Upper bound on the duration probe. A file on a hung FUSE or SMB mount can
+#: make ffprobe block forever; without a timeout the job would never finish and
+#: Cancel would have no handle to stop.
+PROBE_TIMEOUT = 30.0
+
 #: How much of a failed child's stderr is kept for the error message. A damaged
 #: media file can make ffmpeg log hundreds of kilobytes; only the tail is ever
 #: shown, and reading all of it would be pointless.
@@ -140,6 +145,67 @@ def read_tail(path: Path, limit: int = STDERR_TAIL_BYTES) -> str:
     except OSError:
         return ""
     return data.decode("utf-8", errors="replace").strip()
+
+
+def build_ffprobe_cmd(media: Path, binary: str = "ffprobe") -> list[str]:
+    """Build the ffprobe argv that prints `media`'s duration in seconds."""
+    return [
+        binary,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=nw=1:nk=1",
+        str(media),
+    ]
+
+
+def probe_duration(
+    media: Path,
+    *,
+    timeout: float = PROBE_TIMEOUT,
+    binary: str = "ffprobe",
+    register: Callable[[subprocess.Popen[str] | None], None] | None = None,
+) -> float:
+    """Return `media`'s duration in seconds, or 0.0 when it cannot be known.
+
+    The probe is bounded by `timeout`: a file on a hung network mount must not
+    wedge the job. `register` receives the running `Popen` (and None once it is
+    gone) so the window can stop the probe from Cancel or close, exactly like
+    the ffmpeg and whisper-cli children.
+
+    The contract is deliberately "a float, never an exception": callers use 0.0
+    to mean "progress cannot be computed", and a missing or broken ffprobe must
+    not fail a job that would otherwise transcribe fine.
+    """
+    try:
+        proc = subprocess.Popen(
+            build_ffprobe_cmd(media, binary),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except OSError:
+        return 0.0
+    if register is not None:
+        register(proc)
+    try:
+        out = ""
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stop_process(proc)
+            return 0.0
+    finally:
+        if register is not None:
+            register(None)
+    if proc.returncode != 0:
+        return 0.0
+    try:
+        return float(out.strip())
+    except ValueError:
+        return 0.0
 
 
 def parse_progress_line(line: str) -> float | None:

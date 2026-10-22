@@ -26,6 +26,7 @@ from shept.transcribe import (
     ms_to_ts,
     parse_progress_line,
     parse_segment,
+    probe_duration,
     read_tail,
     stop_process,
     ts_to_ms,
@@ -414,6 +415,67 @@ def test_read_tail_caps_a_huge_log_at_the_end(tmp_path):
 
 def test_read_tail_of_a_missing_file_is_empty(tmp_path):
     assert read_tail(tmp_path / "gone.log") == ""
+
+
+# ------------------------------------------------------------- duration probe
+
+
+def _fake_ffprobe(tmp_path, body: str):
+    """An executable stand-in for ffprobe, so the probe can be tested fast."""
+    script = tmp_path / "fake-ffprobe"
+    script.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
+def test_probe_duration_reads_the_printed_seconds(tmp_path):
+    script = _fake_ffprobe(tmp_path, "echo 123.25")
+
+    assert probe_duration(tmp_path / "media.mp3", binary=str(script)) == 123.25
+
+
+def test_probe_duration_returns_zero_when_the_probe_hangs(tmp_path):
+    """A hung mount must not wedge the job: the timeout wins and returns 0.0."""
+    script = _fake_ffprobe(tmp_path, "sleep 30\necho 12.5")
+    start = time.monotonic()
+
+    duration = probe_duration(tmp_path / "media.mp3", timeout=0.2, binary=str(script))
+
+    assert duration == 0.0
+    assert time.monotonic() - start < 5
+
+
+def test_probe_duration_returns_zero_for_unparseable_output(tmp_path):
+    script = _fake_ffprobe(tmp_path, "echo N/A")
+
+    assert probe_duration(tmp_path / "media.mp3", binary=str(script)) == 0.0
+
+
+def test_probe_duration_returns_zero_when_ffprobe_fails(tmp_path):
+    script = _fake_ffprobe(tmp_path, "exit 1")
+
+    assert probe_duration(tmp_path / "media.mp3", binary=str(script)) == 0.0
+
+
+def test_probe_duration_returns_zero_when_ffprobe_is_missing(tmp_path):
+    missing = tmp_path / "no-such-ffprobe"
+
+    assert probe_duration(tmp_path / "media.mp3", binary=str(missing)) == 0.0
+
+
+def test_probe_duration_registers_and_releases_the_child(tmp_path):
+    seen: list[object] = []
+    script = _fake_ffprobe(tmp_path, "echo 1.5")
+
+    probe_duration(
+        tmp_path / "media.mp3",
+        binary=str(script),
+        register=seen.append,
+    )
+
+    assert len(seen) == 2
+    assert isinstance(seen[0], subprocess.Popen)
+    assert seen[1] is None
 
 
 def test_stop_process_terminates_a_running_child():
