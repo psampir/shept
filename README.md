@@ -30,7 +30,9 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
 - Download models from inside the app, with progress and cancellation
 - Skip silence with whisper.cpp's Silero VAD, so silent stretches never reach
   the model and are not hallucinated into text
-- Remember the model, language and silence choice between runs
+- Every language whisper.cpp supports — all 100, auto-detect included — behind
+  a searchable picker with fuzzy matching and starred favourites
+- Remember the model, language, favourites and silence choice between runs
 - Streams output as it transcribes, with a per-file progress bar and a summary
   when the batch ends
 - Copy or save the selected file's transcript, or export every finished file
@@ -216,9 +218,16 @@ command.
    skipped instead of queued twice.
 2. Pick a **Model** (`large-v3-turbo` is selected automatically if present).
    Press **Manage…** to download one if the list is empty or you want another.
-3. Pick the source **Language** (defaults to your system locale when Shept
-   supports it, otherwise auto-detect) and leave **Skip silence** on — it is
-   the default whenever the VAD asset is installed. See
+3. Pick the source **Language** with **Choose…**. The picker holds every
+   language whisper.cpp supports — 100 of them — and filters as you type:
+   `ukr` finds Ukrainian, `jpn` finds Japanese, and matching is a case-
+   insensitive subsequence search over both the name and the code, so
+   `pol` puts Polish first without you having to remember the whole word. The
+   star on a row marks it as a favourite; favourites sit just under
+   **Auto-detect** whenever the search box is empty. Enter takes the first
+   match, Escape closes the picker. The language defaults to your system
+   locale when whisper supports it, otherwise auto-detect. Leave **Skip
+   silence** on — it is the default whenever the VAD asset is installed. See
    [Skipping silence](#skipping-silence) for what it changes and how to fetch
    the asset.
 4. Click **Transcribe all** — the button reads **Transcribe** when exactly one
@@ -285,19 +294,26 @@ exposes are not in the interface; they are left at upstream's defaults.
 
 ### Settings
 
-Shept remembers the selected **Model**, **Language** and **Skip silence**
-choice in:
+Shept remembers the selected **Model**, **Language**, language **favourites**
+and **Skip silence** choice in:
 
 ```
 $XDG_CONFIG_HOME/shept/settings.json     # ~/.config/shept/settings.json
 ```
 
+Favourites live in the same file as a `favourites` list of language codes, in
+the order you starred them; starring or unstarring a language in the picker
+writes the file straight away. The list is read tolerantly, so a hand-edited
+file survives a stray code, a duplicate or an entry of the wrong type — those
+are simply dropped.
+
 Delete that file to return to the defaults: the model Shept picks on a fresh
-install, the language your locale implies, and Skip silence on only when the
-VAD asset is available. The file is written atomically — a crash while saving
-cannot leave a half-written one behind — and it is read defensively: a damaged
-file, unknown language code or wrongly typed value is ignored, and a model that
-has since been removed from disk silently gives way to the default selection.
+install, the language your locale implies, no favourites, and Skip silence on
+only when the VAD asset is available. The file is written atomically — a crash
+while saving cannot leave a half-written one behind — and it is read
+defensively: a damaged file, unknown language code or wrongly typed value is
+ignored, and a model that has since been removed from disk silently gives way
+to the default selection.
 
 ### Translating a transcript
 

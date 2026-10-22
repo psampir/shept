@@ -39,7 +39,13 @@ from shept.environment import (  # noqa: E402
     model_search_paths,
     vad_model_for,
 )
-from shept.languages import LANGUAGES  # noqa: E402
+from shept.languages import (  # noqa: E402
+    AUTO,
+    Language,
+    language_by_code,
+    language_name,
+    search,
+)
 from shept.models import (  # noqa: E402
     CATALOG,
     VAD_SPEC,
@@ -119,6 +125,13 @@ class SheptWindow(Adw.ApplicationWindow):
         #: stream into the buffer only while this is the running job.
         self._buffer_job: Job | None = None
         self._rows: dict[Job, JobRow] = {}
+        #: The language the next batch will use. It is copied into `_run_lang`
+        #: when Transcribe is pressed, so choosing another language mid-batch
+        #: affects only the jobs that have not started yet.
+        self._language = default_language()
+        #: Starred language codes, in the order the user starred them.
+        self._favourites: list[str] = []
+        self._lang_picker: LanguagePicker | None = None
         #: Model/language are captured when the batch starts, so changing a
         #: dropdown mid-run does not split the batch across settings.
         self._run_model: Path | None = None
@@ -261,15 +274,19 @@ class SheptWindow(Adw.ApplicationWindow):
         self._hint_box = self._models_hint()
         controls.append(self._hint_box)
 
-        self.lang_row = Adw.ComboRow(title="Language")
-        lang_strings = Gtk.StringList()
-        for language in LANGUAGES:
-            lang_strings.append(language.name)
-        self.lang_row.set_model(lang_strings)
-        lang_default = default_language()
-        self.lang_row.set_selected(
-            [language.code for language in LANGUAGES].index(lang_default)
+        # A row plus a picker instead of a combo box: whisper knows 100
+        # languages, which is unusable as a dropdown, and the picker adds
+        # search and favourites.
+        self.lang_row = Adw.ActionRow(
+            title="Language",
+            subtitle=language_name(self._language),
         )
+        self.lang_btn = Gtk.Button(label="Choose…")
+        self.lang_btn.set_valign(Gtk.Align.CENTER)
+        self.lang_btn.set_tooltip_text("Search every language whisper supports")
+        self.lang_btn.connect("clicked", self._on_choose_language)
+        self.lang_row.add_suffix(self.lang_btn)
+        self.lang_row.set_activatable_widget(self.lang_btn)
         group.add(self.lang_row)
 
         # Skipping silence is whisper.cpp's Silero VAD stage. The switch is on
@@ -365,9 +382,8 @@ class SheptWindow(Adw.ApplicationWindow):
         if stored.model is not None:
             self._reload_models(select=stored.model)
 
-        codes = [language.code for language in LANGUAGES]
-        if stored.language in codes:
-            self.lang_row.set_selected(codes.index(stored.language))
+        self._favourites = list(stored.favourites)
+        self._set_language(stored.language)
 
         # Before the first save there is no file and no user choice yet, so the
         # switch keeps its default: on when the VAD asset is installed.
@@ -380,7 +396,6 @@ class SheptWindow(Adw.ApplicationWindow):
         self._suppress_vad = False
 
         self.model_row.connect("notify::selected", self._on_model_changed)
-        self.lang_row.connect("notify::selected", self._on_language_changed)
         self.vad_row.connect("notify::active", self._on_vad_toggled)
 
     def _current_settings(self) -> Settings:
@@ -390,6 +405,7 @@ class SheptWindow(Adw.ApplicationWindow):
             model=model_display_name(model) if model is not None else None,
             language=self._selected_lang(),
             skip_silence=self.vad_row.get_active() and self._vad_model is not None,
+            favourites=list(self._favourites),
         )
 
     def _save_settings(self) -> None:
@@ -402,7 +418,46 @@ class SheptWindow(Adw.ApplicationWindow):
     def _on_model_changed(self, *_args: object) -> None:
         self._save_settings()
 
-    def _on_language_changed(self, *_args: object) -> None:
+    # ---------------------------------------------------------------- language
+
+    def _on_choose_language(self, _btn: Gtk.Button) -> None:
+        """Open the picker, or bring back the one that is already open."""
+        if self._lang_picker is not None:
+            self._lang_picker.present()
+            return
+        self._lang_picker = LanguagePicker(
+            self,
+            selected=self._language,
+            favourites=self._favourites,
+            preferred=default_language(),
+            on_select=self._on_language_selected,
+            on_favourite=self._on_favourite_toggled,
+        )
+        self._lang_picker.connect("close-request", self._on_lang_picker_closed)
+        self._lang_picker.present()
+
+    def _on_lang_picker_closed(self, *_args: object) -> bool:
+        self._lang_picker = None
+        return False
+
+    def _set_language(self, code: str) -> None:
+        """Select `code` (falling back to auto) and show it on the row."""
+        language = language_by_code(code)
+        self._language = language.code if language is not None else AUTO.code
+        self.lang_row.set_subtitle(language_name(self._language))
+
+    def _on_language_selected(self, code: str) -> None:
+        """A row in the picker was activated."""
+        self._set_language(code)
+        self._save_settings()
+
+    def _on_favourite_toggled(self, code: str, active: bool) -> None:
+        """Keep the window's favourite list in step with the picker's stars."""
+        if active:
+            if code not in self._favourites:
+                self._favourites.append(code)
+        else:
+            self._favourites = [item for item in self._favourites if item != code]
         self._save_settings()
 
     def _models_hint(self) -> Gtk.Widget:
@@ -717,10 +772,7 @@ class SheptWindow(Adw.ApplicationWindow):
         return self._models[index]
 
     def _selected_lang(self) -> str:
-        index = self.lang_row.get_selected()
-        if not 0 <= index < len(LANGUAGES):
-            return "auto"
-        return LANGUAGES[index].code
+        return self._language
 
     # ---------------------------------------------------------------- silence
 
@@ -1443,6 +1495,214 @@ class ModelDownloadDialog(Adw.Window):
             self._parent.status.set_text("Model download cancelled.")
             self._active = None
         return False
+
+
+class LanguagePicker(Adw.Window):
+    """Searchable language chooser with a star per language.
+
+    A plain `Adw.Window`, like the model downloader, rather than `Adw.Dialog`:
+    the Flatpak runtime ships libadwaita 1.4 and `Adw.Dialog` only exists from
+    1.5 on. The picker owns a copy of the favourite list while it is open; the
+    window it was opened from is told about every change through the callbacks.
+    """
+
+    def __init__(
+        self,
+        parent: SheptWindow,
+        *,
+        selected: str,
+        favourites: list[str],
+        preferred: str | None,
+        on_select: Callable[[str], None],
+        on_favourite: Callable[[str, bool], None],
+    ) -> None:
+        super().__init__(transient_for=parent, modal=True, title="Language")
+        self.set_default_size(440, 600)
+
+        self._selected = selected
+        self._favourites = list(favourites)
+        self._preferred = preferred
+        self._on_select = on_select
+        self._on_favourite = on_favourite
+        #: Row -> language code. Rebuilt together with the rows, because a
+        #: row's position changes with every query.
+        self._codes: dict[Gtk.ListBoxRow, str] = {}
+
+        toolbar = Adw.ToolbarView()
+        self.set_content(toolbar)
+        toolbar.add_top_bar(Adw.HeaderBar())
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        toolbar.set_content(box)
+
+        self.search_entry = Gtk.SearchEntry()
+        self.search_entry.set_placeholder_text("Search languages…")
+        self.search_entry.connect("changed", self._on_query_changed)
+        self.search_entry.connect("activate", self._on_activate)
+        box.append(self.search_entry)
+
+        self.hint = Gtk.Label(xalign=0)
+        self.hint.add_css_class("dim-label")
+        box.append(self.hint)
+
+        scroller = Gtk.ScrolledWindow(vexpand=True)
+        box.append(scroller)
+
+        self.listbox = Gtk.ListBox()
+        self.listbox.add_css_class("boxed-list")
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.set_activate_on_single_click(True)
+        self.listbox.connect("row-activated", self._on_row_activated)
+        scroller.set_child(self.listbox)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key_pressed)
+        self.add_controller(keys)
+
+        self._refresh()
+        # The window is not mapped yet, so the first grab may not take; the
+        # idle repeats it once it is.
+        self.search_entry.grab_focus()
+        GLib.idle_add(self._focus_search)
+
+    # ------------------------------------------------------------------ rows
+
+    def _focus_search(self) -> bool:
+        self.search_entry.grab_focus()
+        return GLib.SOURCE_REMOVE
+
+    def _rows(self) -> list[Gtk.ListBoxRow]:
+        rows: list[Gtk.ListBoxRow] = []
+        child = self.listbox.get_first_child()
+        while child is not None:
+            assert isinstance(child, Gtk.ListBoxRow)
+            rows.append(child)
+            child = child.get_next_sibling()
+        return rows
+
+    def _refresh(self) -> None:
+        """Rebuild the list for the current query and favourite list."""
+        while (child := self.listbox.get_first_child()) is not None:
+            self.listbox.remove(child)
+        self._codes.clear()
+
+        results = search(
+            self.search_entry.get_text(), self._favourites, self._preferred
+        )
+        for language in results:
+            row = self._make_row(language)
+            self._codes[row] = language.code
+            self.listbox.append(row)
+
+        if self.search_entry.get_text().strip():
+            noun = "match" if len(results) == 1 else "matches"
+            self.hint.set_text(f"{len(results)} {noun} — Enter picks the first")
+        else:
+            self.hint.set_text(
+                f"{len(results)} languages — type to filter, Enter picks the first"
+            )
+
+    def _make_row(self, language: Language) -> Adw.ActionRow:
+        row = Adw.ActionRow(title=language.name)
+        if language.code == AUTO.code:
+            row.set_subtitle("Auto-detect — whisper guesses the language")
+        else:
+            row.set_subtitle(language.code)
+
+        if language.code == self._selected:
+            check = Gtk.Image.new_from_icon_name("object-select-symbolic")
+            check.add_css_class("accent")
+            row.add_prefix(check)
+
+        if language.code != AUTO.code:
+            starred = language.code in self._favourites
+            star = Gtk.ToggleButton()
+            star.add_css_class("flat")
+            star.set_valign(Gtk.Align.CENTER)
+            star.set_active(starred)
+            star.set_icon_name(
+                "starred-symbolic" if starred else "non-starred-symbolic"
+            )
+            star.set_tooltip_text(
+                "Remove from favourites" if starred else "Add to favourites"
+            )
+            star.connect("toggled", self._on_star_toggled, language.code)
+            row.add_suffix(star)
+
+        return row
+
+    # --------------------------------------------------------------- actions
+
+    def _choose(self, code: str) -> None:
+        self._selected = code
+        self._on_select(code)
+        self.close()
+
+    def _on_query_changed(self, _entry: Gtk.SearchEntry) -> None:
+        """Filter live, so the list follows every keystroke."""
+        self._refresh()
+
+    def _on_row_activated(self, _listbox: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
+        code = self._codes.get(row)
+        if code is not None:
+            self._choose(code)
+
+    def _on_activate(self, _entry: Gtk.SearchEntry) -> None:
+        """Enter takes the best match, which is the first row."""
+        row = self.listbox.get_row_at_index(0)
+        if row is not None:
+            self._on_row_activated(self.listbox, row)
+
+    def _on_star_toggled(self, button: Gtk.ToggleButton, code: str) -> None:
+        active = button.get_active()
+        button.set_icon_name("starred-symbolic" if active else "non-starred-symbolic")
+        button.set_tooltip_text(
+            "Remove from favourites" if active else "Add to favourites"
+        )
+        if active:
+            if code not in self._favourites:
+                self._favourites.append(code)
+        else:
+            self._favourites = [item for item in self._favourites if item != code]
+        # Rows are deliberately not rebuilt: with an empty query a new
+        # favourite would jump above the row the user just clicked.
+        self._on_favourite(code, active)
+
+    # -------------------------------------------------------------- keyboard
+
+    def _on_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        if keyval == Gdk.KEY_Escape:
+            self.close()
+            return True
+        if keyval in (Gdk.KEY_Down, Gdk.KEY_Up):
+            return self._move_focus(-1 if keyval == Gdk.KEY_Up else 1)
+        return False
+
+    def _move_focus(self, delta: int) -> bool:
+        """Move the focus one row down/up; arrows never scroll the list."""
+        rows = self._rows()
+        if not rows:
+            return True
+        focused = self.get_focus()
+        if focused in rows:
+            index = rows.index(focused) + delta
+        else:
+            # Coming from the search entry: Down starts at the top, Up at the
+            # bottom, so one key press always lands on a row.
+            index = 0 if delta > 0 else len(rows) - 1
+        index = max(0, min(index, len(rows) - 1))
+        rows[index].grab_focus()
+        return True
 
 
 class SheptApp(Adw.Application):

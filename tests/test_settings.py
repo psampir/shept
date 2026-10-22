@@ -117,6 +117,7 @@ def test_saved_file_is_readable_json(target):
         "model": "small",
         "language": "uk",
         "skip_silence": True,
+        "favourites": [],
     }
 
 
@@ -258,3 +259,66 @@ def test_directory_instead_of_file_returns_defaults(locale_env, target):
     target.mkdir(parents=True)
 
     assert load(target) == Settings()
+
+
+# ----------------------------------------------------------------- favourites
+
+
+def test_favourites_default_to_empty(locale_env):
+    assert Settings().favourites == []
+
+
+def test_favourites_round_trip_in_order(target):
+    original = Settings(language="pl", favourites=["uk", "ja", "yue"])
+
+    save(original, target)
+
+    assert load(target).favourites == ["uk", "ja", "yue"]
+
+
+def test_favourites_are_saved_in_the_json(target):
+    save(Settings(favourites=["uk", "ja"]), target)
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+
+    assert payload["favourites"] == ["uk", "ja"]
+
+
+def test_a_settings_file_without_favourites_still_loads(locale_env, target):
+    _write(target, {"model": "small", "language": "pl", "skip_silence": True})
+
+    settings = load(target)
+
+    assert settings == Settings(model="small", language="pl", skip_silence=True)
+    assert settings.favourites == []
+
+
+def test_unknown_favourites_are_dropped(locale_env, target):
+    _write(target, {"favourites": ["uk", "xx", "english", "auto", "", "ja"]})
+
+    assert load(target).favourites == ["uk", "ja"]
+
+
+def test_duplicate_favourites_keep_the_first_position(locale_env, target):
+    _write(target, {"favourites": ["ja", "uk", "ja", "uk"]})
+
+    assert load(target).favourites == ["ja", "uk"]
+
+
+@pytest.mark.parametrize("value", ["pl", 5, None, {}, True])
+def test_a_non_list_favourites_value_becomes_empty(locale_env, target, value):
+    _write(target, {"favourites": value})
+
+    assert load(target).favourites == []
+
+
+def test_non_string_favourites_are_dropped(locale_env, target):
+    _write(target, {"favourites": [5, None, ["uk"], {"ja": True}, "pl"]})
+
+    assert load(target).favourites == ["pl"]
+
+
+def test_a_favourites_list_of_only_junk_becomes_empty(locale_env, target):
+    _write(target, {"favourites": [5, None, "xx"]})
+
+    assert load(target).favourites == []

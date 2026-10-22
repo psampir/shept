@@ -20,6 +20,29 @@ from shept.languages import AUTO, LANGUAGES
 #: Language codes Shept knows how to pass to whisper-cli, plus `auto`.
 LANGUAGE_CODES = frozenset({AUTO.code, *(language.code for language in LANGUAGES)})
 
+#: Codes that can be favourites. `auto` cannot: it is a mode, not a language,
+#: and starring it would only take a slot that belongs to a real entry.
+FAVOURITE_CODES = frozenset(language.code for language in LANGUAGES)
+
+
+def _favourites(value: object) -> list[str]:
+    """Tolerant reader for the favourites list.
+
+    Anything a picker cannot show is dropped: a value that is not a list, a
+    non-string entry, an unknown code, a duplicate. Order is preserved because
+    the user chose it, and the first occurrence wins.
+    """
+    if not isinstance(value, list):
+        return []
+    codes: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        code = item.strip().lower()
+        if code in FAVOURITE_CODES and code not in codes:
+            codes.append(code)
+    return codes
+
 
 @dataclass
 class Settings:
@@ -32,6 +55,9 @@ class Settings:
     model: str | None = None
     language: str = field(default_factory=default_language)
     skip_silence: bool = False
+    #: Language codes the picker shows first, in the order the user starred
+    #: them. Kept as a plain list so the order survives a save/load round trip.
+    favourites: list[str] = field(default_factory=list)
 
 
 def settings_path() -> Path:
@@ -70,6 +96,7 @@ def load(path: Path | None = None) -> Settings:
             else defaults.language
         ),
         skip_silence=skip_silence if isinstance(skip_silence, bool) else False,
+        favourites=_favourites(raw.get("favourites")),
     )
 
 
@@ -87,6 +114,7 @@ def save(settings: Settings, path: Path | None = None) -> Path:
         "model": settings.model,
         "language": settings.language,
         "skip_silence": settings.skip_silence,
+        "favourites": list(settings.favourites),
     }
     try:
         tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

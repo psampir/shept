@@ -19,6 +19,16 @@ and this project adheres to
   fuzzily by name or code — `ukr` finds Ukrainian, `jpn` finds Japanese — with
   results ranked so a prefix beats a word-start match and scattered letters
   come last.
+- **A searchable language picker, with favourites**: the Language row is an
+  `Adw.ActionRow` with a **Choose…** button that opens a picker window — a
+  search box, a live-filtered list and a star on every row. Typing filters
+  through the fuzzy matcher, Enter takes the first match, Escape closes the
+  window and the arrow keys walk the list, so a language is a few keystrokes
+  away instead of a 100-row scroll. Starred languages are stored under
+  `favourites` in `settings.json`, show up directly below **Auto-detect**
+  when the search box is empty, and survive restarts; a star is saved as soon
+  as it is toggled. Settings files written before favourites existed keep
+  loading unchanged.
 - **Skip silence**: a switch under Language drives whisper.cpp's Silero VAD
   stage (`--vad -vm`), so silent stretches are dropped before they reach the
   model and the invented "thank you for watching" that whisper likes to put
