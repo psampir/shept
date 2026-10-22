@@ -61,8 +61,35 @@ transcription considerably faster than a CPU-only build on most modern GPUs
 
 ## Install
 
-Shept itself is one small Python package; the only real work is getting
-`whisper-cli` onto your PATH.
+Two ways: a self-contained Flatpak bundle from the releases page (nothing else
+to install), or a wheel that uses the `whisper-cli` already on your system.
+
+### Flatpak bundle
+
+Each release ships `shept.flatpak`, which bundles `whisper-cli` and `ffmpeg`, so
+neither has to be installed on the host:
+
+```bash
+curl -LO https://github.com/psampir/shept/releases/latest/download/shept.flatpak
+flatpak install --user shept.flatpak
+```
+
+GPU drivers are deliberately not bundled: Vulkan comes from the host through
+`--device=dri`, so driver updates keep working. Models are shared with a native
+install — see [Models](#models).
+
+### Wheel
+
+If `whisper-cli` and `ffmpeg` are already on your PATH, install the wheel
+attached to the release:
+
+```bash
+python3 -m pip install --user ./shept-<version>-py3-none-any.whl
+python3 -m shept
+```
+
+PyGObject is taken from the system and never from pip. The distribution sections
+below cover `whisper-cli` only, so skip them if you used the Flatpak bundle.
 
 ### Fedora
 
