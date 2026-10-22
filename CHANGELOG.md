@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-22
+
+### Changed
+
+- The application icon is new: a head in profile with a hand raised to its
+  mouth.
+
+- The desktop entry and icon are now installed by the wheel.
+
+### Fixed
+
+- The Flatpak manifest now grants network access, so the model downloader works
+  inside the sandbox.
+
 ## [0.1.0] - 2026-10-22
 
 First release.
@@ -54,7 +68,8 @@ First release.
   whisper.cpp with Vulkan and shared libraries, rebuilds `ffmpeg` for the
   `ffmpeg` / `ffprobe` executables, and installs Shept itself.
 
-[Unreleased]: https://github.com/psampir/shept/compare/v0.1.0...dev
+[Unreleased]: https://github.com/psampir/shept/compare/v0.1.1...dev
+[0.1.1]: https://github.com/psampir/shept/releases/tag/v0.1.1
 [0.1.0]: https://github.com/psampir/shept/releases/tag/v0.1.0
 
 - **Delete models from the app**: every installed model in the **Manage…**
