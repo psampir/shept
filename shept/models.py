@@ -246,13 +246,33 @@ def download_dir() -> Path:
     `$XDG_DATA_HOME/shept/models` is the first place `environment` searches for
     models and the only model directory that is writable inside the Flatpak
     sandbox, so downloads always land there rather than next to an existing
-    system-wide model.
+    system-wide model. Leftover `.part` files from an interrupted run are
+    removed here, so they cannot accumulate forever.
     """
     data_home = os.environ.get("XDG_DATA_HOME", "").strip()
     base = Path(data_home) if data_home else Path.home() / ".local" / "share"
     directory = base / "shept" / "models"
     directory.mkdir(parents=True, exist_ok=True)
+    _remove_stale_parts(directory)
     return directory
+
+
+def _remove_stale_parts(directory: Path) -> None:
+    """Delete half-written downloads; nothing ever reads a `.part` file back."""
+    try:
+        parts = list(directory.glob("*.part"))
+    except OSError:
+        return
+    for part in parts:
+        _discard(part)
+
+
+def _discard(path: Path) -> None:
+    """Best-effort removal of a temporary file; never raises."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def is_downloaded(spec: ModelSpec, dest_dir: Path) -> bool:
@@ -335,14 +355,19 @@ def download(
                     f"({received} of {total} bytes)."
                 )
     except DownloadCancelled:
-        part_path.unlink(missing_ok=True)
+        _discard(part_path)
         raise
     except OSError as exc:
-        part_path.unlink(missing_ok=True)
+        _discard(part_path)
         raise DownloadError(f"Could not download {spec.name}: {exc}") from exc
     except BaseException:
-        part_path.unlink(missing_ok=True)
+        _discard(part_path)
         raise
 
-    os.replace(part_path, final_path)
+    try:
+        os.replace(part_path, final_path)
+    except OSError:
+        # A failed rename must not leave the half-written file behind either.
+        _discard(part_path)
+        raise
     return final_path

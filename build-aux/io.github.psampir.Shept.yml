@@ -94,6 +94,10 @@ modules:
         /app/share/metainfo/io.github.psampir.Shept.metainfo.xml
       - install -Dm644 data/icons/hicolor/scalable/apps/io.github.psampir.Shept.svg
         /app/share/icons/hicolor/scalable/apps/io.github.psampir.Shept.svg
+      # The licence has to live inside the sandbox as well: /app/share/licenses
+      # is where Flatpak and `flatpak info --show-license` look for it.
+      - install -Dm644 LICENSE
+        /app/share/licenses/io.github.psampir.Shept/LICENSE
       - install -Dm755 build-aux/shept.in /app/bin/shept
     sources:
       - type: dir

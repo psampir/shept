@@ -103,9 +103,11 @@ def load(path: Path | None = None) -> Settings:
 def save(settings: Settings, path: Path | None = None) -> Path:
     """Write `settings` to `path` atomically and return that path.
 
-    The JSON is written to `<name>.tmp` in the same directory and moved into
-    place with `os.replace`, so a crash mid-write cannot leave a truncated
-    settings file behind for the next start to trip over.
+    The JSON is written to `<name>.tmp` in the same directory, flushed and
+    fsynced, then moved into place with `os.replace`, so a crash mid-write
+    cannot leave a truncated settings file behind for the next start to trip
+    over — and a crash right after the replace cannot lose the new content
+    either.
     """
     target = Path(path) if path is not None else settings_path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +119,12 @@ def save(settings: Settings, path: Path | None = None) -> Path:
         "favourites": list(settings.favourites),
     }
     try:
-        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2) + "\n")
+            handle.flush()
+            # The rename is atomic, but the bytes it points at may still sit in
+            # the page cache; fsync is what makes the "crash-safe" claim true.
+            os.fsync(handle.fileno())
         os.replace(tmp, target)
     except OSError:
         tmp.unlink(missing_ok=True)

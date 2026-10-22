@@ -7,7 +7,6 @@ GTK-free so it can be tested without PyGObject.
 from __future__ import annotations
 
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -27,7 +26,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 from shept import APP_ID, settings  # noqa: E402
 from shept.environment import (  # noqa: E402
     MODELS_URL,
-    REQUIRED_TOOLS,
+    RUN_TOOLS,
     abbreviate_home,
     default_language,
     default_skip_silence,
@@ -35,6 +34,7 @@ from shept.environment import (  # noqa: E402
     discover_models,
     find_vad_model,
     install_hint,
+    missing_tools,
     model_display_name,
     model_search_paths,
     vad_model_for,
@@ -149,9 +149,17 @@ class SheptWindow(Adw.ApplicationWindow):
         self._suppress_vad = False
         #: The VAD hint row's state. `_set_vad_state` is the only writer.
         self._vad_state = VadState.MISSING
-        self._missing_tools = [
-            name for name in REQUIRED_TOOLS if shutil.which(name) is None
-        ]
+        self._missing_tools = missing_tools()
+        #: Only the absent tools that actually stop a run; a missing ffprobe is
+        #: reported in the banner but must not disable Transcribe.
+        self._blocking_tools = missing_tools(RUN_TOOLS)
+        # Clean up after a download that died mid-transfer. The directory is
+        # only created if it is missing, and an unwritable $XDG_DATA_HOME is
+        # ignored here: Manage… reports it when the user actually needs it.
+        try:
+            download_dir()
+        except OSError:
+            pass
 
         toolbar = Adw.ToolbarView()
         self.set_content(toolbar)
@@ -549,9 +557,9 @@ class SheptWindow(Adw.ApplicationWindow):
 
     def _transcribe_blocker(self) -> str:
         """Return why Transcribe is unavailable, or "" when it is available."""
-        if self._missing_tools:
-            names = " and ".join(self._missing_tools)
-            return f"Missing {names} — {install_hint(self._missing_tools[0])}"
+        if self._blocking_tools:
+            names = " and ".join(self._blocking_tools)
+            return f"Missing {names} — {install_hint(self._blocking_tools[0])}"
         if not self._models:
             return "No Whisper model found — see the hint below the model row."
         if not self.queue.jobs:
@@ -825,6 +833,16 @@ class SheptWindow(Adw.ApplicationWindow):
         """Refuse to switch VAD on without its model, and point at the download."""
         if self._suppress_vad:
             return
+        if self._vad_model is not None and not self._vad_model.exists():
+            # The asset disappeared while the app was running (a cleanup, an
+            # uninstall): re-resolve instead of handing a stale path to the
+            # next run, and fall back to the download hint when it is gone.
+            self._vad_model = find_vad_model()
+            if self._vad_model is None:
+                self._set_vad_state(VadState.MISSING)
+                self.status.set_text(
+                    "Silero VAD file disappeared — press Download to fetch it again."
+                )
         if row.get_active() and self._vad_model is None:
             # Re-applying the current state puts the row back exactly as it
             # was: switch off, hint visible, and a failure message intact.

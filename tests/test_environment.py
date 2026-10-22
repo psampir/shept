@@ -300,6 +300,42 @@ def test_install_hint_fedora(monkeypatch):
     assert "dnf install" in environment.install_hint("whisper-cli")
     assert "whisper-cpp" in environment.install_hint("whisper-cli")
     assert environment.install_hint("ffmpeg") == "sudo dnf install -y ffmpeg"
+    assert environment.install_hint("ffprobe") == "sudo dnf install -y ffmpeg"
+
+
+# ------------------------------------------------------------- missing tools
+
+
+def test_ffprobe_is_a_required_tool():
+    """Without ffprobe every job would sit at 0 % with no explanation."""
+    assert "ffprobe" in environment.REQUIRED_TOOLS
+
+
+def test_ffprobe_is_not_a_run_blocker():
+    """The banner names it, but Transcribe must stay available without it."""
+    assert "ffprobe" not in environment.RUN_TOOLS
+    assert set(environment.RUN_TOOLS) <= set(environment.REQUIRED_TOOLS)
+
+
+def test_missing_tools_names_an_absent_ffprobe():
+    installed = {
+        "whisper-cli": "/usr/bin/whisper-cli",
+        "ffmpeg": "/usr/bin/ffmpeg",
+    }
+
+    assert environment.missing_tools(which=installed.get) == ["ffprobe"]
+
+
+def test_missing_tools_is_empty_when_everything_is_installed():
+    assert environment.missing_tools(which=lambda name: f"/usr/bin/{name}") == []
+
+
+def test_missing_tools_keeps_the_required_order():
+    assert environment.missing_tools(which=lambda _name: None) == [
+        "whisper-cli",
+        "ffmpeg",
+        "ffprobe",
+    ]
 
 
 def test_install_hint_arch(monkeypatch):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import errno
 import io
 import socket
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -175,6 +176,37 @@ def test_download_dir_creates_nested_directories(tmp_path, monkeypatch):
     assert download_dir().is_dir()
 
 
+def test_download_dir_removes_stale_part_files(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
+    directory = data / "shept" / "models"
+    directory.mkdir(parents=True)
+    stale = directory / "ggml-small.bin.part"
+    stale.write_bytes(b"half a model")
+    keep = directory / "ggml-small.bin"
+    keep.write_bytes(b"complete")
+
+    download_dir()
+
+    assert not stale.exists()
+    assert keep.exists()
+
+
+def test_download_dir_survives_a_part_file_it_cannot_remove(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
+    directory = data / "shept" / "models"
+    directory.mkdir(parents=True)
+    (directory / "ggml-small.bin.part").write_bytes(b"half")
+
+    def boom(self, *_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+
+    assert download_dir() == directory
+
+
 # -------------------------------------------------------------------- download
 
 
@@ -239,6 +271,20 @@ def test_download_leaves_no_part_file_on_success(monkeypatch, dest):
     download(SPEC, dest, is_cancelled=lambda: False)
 
     assert sorted(p.name for p in dest.iterdir()) == [SPEC.filename]
+
+
+def test_download_removes_part_file_when_the_rename_fails(monkeypatch, dest):
+    monkeypatch.setattr(models, "urlopen", lambda request, timeout=30: FakeResponse())
+
+    def failing_replace(_src, _dst):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(models.os, "replace", failing_replace)
+
+    with pytest.raises(OSError, match="Read-only"):
+        download(SPEC, dest, is_cancelled=lambda: False)
+
+    assert list(dest.iterdir()) == []
 
 
 def test_download_creates_destination_directory(monkeypatch, tmp_path):
@@ -372,6 +418,26 @@ def test_is_downloaded_ignores_part_files(dest):
     (dest / (SPEC.filename + ".part")).write_bytes(PAYLOAD)
 
     assert is_downloaded(SPEC, dest) is False
+
+
+def test_is_complete_vad_accepts_the_published_size(tmp_path):
+    vad = tmp_path / VAD_SPEC.filename
+    vad.write_bytes(b"")
+    with vad.open("rb+") as handle:
+        handle.truncate(VAD_SPEC.size_bytes)
+
+    assert models.is_complete_vad(vad) is True
+
+
+def test_is_complete_vad_rejects_a_truncated_file(tmp_path):
+    vad = tmp_path / VAD_SPEC.filename
+    vad.write_bytes(b"not really a model")
+
+    assert models.is_complete_vad(vad) is False
+
+
+def test_is_complete_vad_rejects_a_missing_file(tmp_path):
+    assert models.is_complete_vad(tmp_path / VAD_SPEC.filename) is False
 
 
 # ------------------------------------------------ friendly download failures

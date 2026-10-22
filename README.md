@@ -50,7 +50,9 @@ Only file transcription is supported — there is no microphone / live mode.
 
 - Python 3.10+
 - GTK 4, libadwaita and PyGObject (`gi`) — system packages, not pip installs
-- `ffmpeg` and `ffprobe`
+- `ffmpeg` and `ffprobe` — Shept checks for both at startup and names the
+  missing one in the banner; without `ffprobe` transcription still works, but
+  progress stays at 0 % for the whole file
 - `whisper-cli` from whisper.cpp (1.7 or newer)
 
 GPU acceleration is optional. A build of whisper.cpp with Vulkan support makes
@@ -163,9 +165,10 @@ searches and the only model directory that is writable inside the Flatpak
 sandbox, so a model downloaded there is visible to both the Flatpak and a
 source checkout. A transfer is written as `ggml-<model>.bin.part` and only
 renamed once it is complete, so an interrupted download never shows up in the
-dropdown; the partial file is deleted on failure or cancellation. There is no
-checksum to verify against — HuggingFace does not publish per-file hashes — so
-Shept only checks the downloaded size against the published one.
+dropdown; the partial file is deleted on failure or cancellation, and any
+leftover from an earlier crash is removed the next time the folder is opened.
+There is no checksum to verify against — HuggingFace does not publish per-file
+hashes — so Shept only checks the downloaded size against the published one.
 
 Recommended: **`large-v3-turbo`** (~1.62 GB, f16) — the best accuracy/speed
 balance for most languages, including non-English ones.
@@ -247,10 +250,13 @@ command.
      whisper.cpp reported), `.lrc` (lyrics) or `.json` (timed segments,
      versioned schema). The menu entry decides the content; the filename you
      type in the dialog does not affect it.
-   - **Export all…** asks for a folder and writes every finished file into it
-     as `<file name>.<ext>`, appending ` (2)`, ` (3)` when two files share a
-     name. It uses the format you last picked in **Selected file** (plain text
-     until you pick one), and skips files that produced no text.
+   - **Export all…** asks for a folder and writes every file that finished
+     successfully into it as `<file name>.<ext>`; failed and cancelled rows are
+     skipped, as are files that produced no text. An existing file in that
+     folder is never overwritten — the new one gets ` (2)`, ` (3)` appended —
+     and very long file names are shortened so the batch cannot stop on a
+     name-length error. It uses the format you last picked in **Selected
+     file** (plain text until you pick one).
 7. **Clear finished** removes completed, failed and cancelled rows from the
    queue without touching anything on disk.
 
@@ -277,8 +283,10 @@ Silero VAD stage (`--vad -vm`):
 
 The asset is not a Whisper model, so it is deliberately absent from the model
 dropdown even though it lives in the same directories. Shept looks for the
-first `ggml-silero-*.bin` in the same places as the models (see
-[Models](#models)); to install it by hand:
+first `ggml-silero-*.bin` of the expected size in the same places as the
+models (see [Models](#models)); a truncated or corrupt file counts as missing,
+so the hint offers the download again instead of failing the next run. To
+install it by hand:
 
 ```bash
 mkdir -p ~/.local/share/shept/models
@@ -366,9 +374,10 @@ subtitle, lyrics and JSON exports are built from.
 Files are transcribed strictly one after another. Decoding and whisper-cli are
 already CPU/GPU-bound, so running two of them at once would make both slower and
 the progress bars meaningless. Each file's temporary WAV is removed as soon as
-its run ends. If a file fails — an unreadable container, a missing codec, a
-non-zero exit from whisper-cli — its row is marked `Failed` with the reason and
-the batch continues with the next file instead of stopping.
+its run ends, along with the log the tools write their diagnostics to. If a file
+fails — an unreadable container, a missing codec, a non-zero exit from
+whisper-cli — its row is marked `Failed` with a short reason and the batch
+continues with the next file instead of stopping.
 
 ## Performance notes
 
@@ -395,10 +404,17 @@ distribution, and keeps **Transcribe all** disabled until it is available.
 **"ffmpeg not found in PATH"** — install `ffmpeg` with your distribution's
 package manager; the same banner explains how.
 
+**"ffprobe not found in PATH"** — `ffprobe` ships with `ffmpeg`, so the usual
+cause is a split package (`ffmpeg-free` without the probe) or a `PATH` that
+only holds one of them. Installing `ffmpeg` fixes it. Transcription still works
+without it, but the progress bars cannot follow the file and stay at 0 %.
+
 **One row says "Failed: …"** — that file could not be processed (damaged or
-unsupported container, missing codec, whisper-cli exited non-zero); the reason
-from the failing tool is in the row. The rest of the queue keeps running.
-Remove the row, fix the file, and add it again.
+unsupported container, missing codec, whisper-cli exited non-zero, a corrupt
+model). The row's subtitle carries the first lines of the reason; hover it to
+see the complete output from the failing tool, which is what a bug report
+needs. The rest of the queue keeps running. Remove the row, fix the file, and
+add it again.
 
 **Model dropdown shows "(no models found)"** — no `ggml-*.bin` file was found in
 any of the directories listed under [Models](#models); the window lists the

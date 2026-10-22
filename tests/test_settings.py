@@ -146,6 +146,30 @@ def test_save_uses_os_replace(target, monkeypatch):
     assert target.is_file()
 
 
+def test_save_fsyncs_before_replacing(target, monkeypatch):
+    calls: list[str] = []
+    real_fsync = settings_module.os.fsync
+    real_replace = settings_module.os.replace
+
+    def spy_fsync(fd):
+        calls.append("fsync")
+        return real_fsync(fd)
+
+    def spy_replace(src, dst):
+        calls.append("replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(settings_module.os, "fsync", spy_fsync)
+    monkeypatch.setattr(settings_module.os, "replace", spy_replace)
+
+    save(Settings(model="small"), target)
+
+    # fsync must happen while the temporary file is still open, i.e. before
+    # the rename that publishes it under the real name.
+    assert calls == ["fsync", "replace"]
+    assert target.is_file()
+
+
 def test_failed_write_leaves_no_temporary_file(target, monkeypatch):
     def boom(*_args, **_kwargs):
         raise OSError("disk full")

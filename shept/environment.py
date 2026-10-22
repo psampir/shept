@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 # `languages` is deliberately dependency-free, so importing it here does not
@@ -24,7 +25,14 @@ MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
 README_URL = "https://github.com/psampir/shept#install"
 ISSUES_URL = "https://github.com/psampir/shept/issues"
 
-REQUIRED_TOOLS = ("whisper-cli", "ffmpeg")
+#: Tools a run cannot work without: decoding is ffmpeg, transcription is
+#: whisper-cli.
+RUN_TOOLS = ("whisper-cli", "ffmpeg")
+
+#: Everything the window checks at startup. ffprobe is here so a missing probe
+#: is visible instead of silently pinning every progress bar at 0 % — but it is
+#: not in `RUN_TOOLS`, because transcription itself does not need it.
+REQUIRED_TOOLS = (*RUN_TOOLS, "ffprobe")
 
 _DISTRO_HINTS: dict[str, dict[str, str]] = {
     "fedora": {
@@ -34,12 +42,14 @@ _DISTRO_HINTS: dict[str, dict[str, str]] = {
             "sneed/whisper-cpp-vulkan)"
         ),
         "ffmpeg": "sudo dnf install -y ffmpeg",
+        "ffprobe": "sudo dnf install -y ffmpeg",
     },
     "arch": {
         "whisper-cli": (
             "sudo pacman -S whisper-cpp ffmpeg python-gobject gtk4 libadwaita"
         ),
         "ffmpeg": "sudo pacman -S ffmpeg",
+        "ffprobe": "sudo pacman -S ffmpeg",
     },
 }
 
@@ -201,6 +211,20 @@ def is_flatpak(marker: Path = Path("/.flatpak-info")) -> bool:
     so the check can be tested without actually being inside a sandbox.
     """
     return marker.exists()
+
+
+def missing_tools(
+    tools: Sequence[str] = REQUIRED_TOOLS,
+    which: Callable[[str], str | None] = shutil.which,
+) -> list[str]:
+    """The tools from `tools` that are not on PATH, in the given order.
+
+    A missing ffprobe belongs in the banner too: without it every job reports
+    0 % progress for its whole length, which looks like a hung run rather than
+    a missing tool. `which` is injectable so the decision can be tested without
+    touching PATH.
+    """
+    return [name for name in tools if which(name) is None]
 
 
 def install_hint(tool: str) -> str:
