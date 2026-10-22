@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "skryba"
+name = "shept"
 version = "0.1.0"
 description = "Local speech-to-text for your desktop, powered by whisper.cpp"
 readme = "README.md"
@@ -37,14 +37,14 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/psampir/skryba"
-Issues = "https://github.com/psampir/skryba/issues"
+Homepage = "https://github.com/psampir/shept"
+Issues = "https://github.com/psampir/shept/issues"
 
 [project.scripts]
-skryba = "skryba.app:main"
+shept = "shept.app:main"
 
 [tool.setuptools.packages.find]
-include = ["skryba*"]
+include = ["shept*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

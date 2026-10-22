@@ -1,4 +1,4 @@
-"""Tests for skryba.transcribe — argv building and whisper/ffmpeg parsing."""
+"""Tests for shept.transcribe — argv building and whisper/ffmpeg parsing."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from skryba.transcribe import (
+from shept.transcribe import (
     build_ffmpeg_cmd,
     build_whisper_cmd,
     parse_progress_line,
@@ -104,7 +104,7 @@ def test_build_ffmpeg_cmd_argv():
 
 def test_build_ffmpeg_cmd_keeps_paths_with_spaces_intact():
     input_path = Path("/tmp/my recordings/lecture 1.m4a")
-    wav_path = Path("/tmp/skryba /input.wav")
+    wav_path = Path("/tmp/shept /input.wav")
 
     cmd = build_ffmpeg_cmd(input_path, wav_path)
 
@@ -153,7 +153,7 @@ def test_build_whisper_cmd_renders_threads_as_string(threads):
 
 def test_build_whisper_cmd_keeps_paths_with_spaces_intact():
     model = Path("/models/my models/ggml-base.bin")
-    wav_path = Path("/tmp/skryba work/input.wav")
+    wav_path = Path("/tmp/shept work/input.wav")
 
     cmd = build_whisper_cmd(model, wav_path, "en", 8, False)
 

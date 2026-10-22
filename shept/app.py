@@ -1,4 +1,4 @@
-"""Skryba — a GTK4 + libadwaita frontend for whisper-cli.
+"""Shept — a GTK4 + libadwaita frontend for whisper-cli.
 
 This is the only module that imports `gi`; the rest of the package is
 GTK-free so it can be tested without PyGObject.
@@ -17,14 +17,14 @@ from pathlib import Path
 
 import gi
 
-# gi.require_version() must run before the gi.repository import, so the skryba
+# gi.require_version() must run before the gi.repository import, so the shept
 # imports below are pushed past the top of the module.
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from skryba import APP_ID  # noqa: E402
-from skryba.environment import (  # noqa: E402
+from shept import APP_ID  # noqa: E402
+from shept.environment import (  # noqa: E402
     LANGUAGES,
     MODELS_URL,
     REQUIRED_TOOLS,
@@ -35,7 +35,7 @@ from skryba.environment import (  # noqa: E402
     model_display_name,
     model_search_paths,
 )
-from skryba.transcribe import (  # noqa: E402
+from shept.transcribe import (  # noqa: E402
     build_ffmpeg_cmd,
     build_whisper_cmd,
     parse_progress_line,
@@ -44,9 +44,9 @@ from skryba.transcribe import (  # noqa: E402
 )
 
 
-class SkrybaWindow(Adw.ApplicationWindow):
+class SheptWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
-        super().__init__(application=app, title="Skryba")
+        super().__init__(application=app, title="Shept")
         self.set_default_size(820, 640)
 
         self._proc: subprocess.Popen[str] | None = None
@@ -301,7 +301,7 @@ class SkrybaWindow(Adw.ApplicationWindow):
         lang: str,
         translate: bool,
     ) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory(prefix="skryba-")
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="shept-")
         wav_path = Path(self._tmpdir.name) / "input.wav"
 
         input_duration = self._probe_duration(input_path)
@@ -440,17 +440,18 @@ class SkrybaWindow(Adw.ApplicationWindow):
         self.status.set_text(f"Saved: {f.get_path()}")
 
 
-class SkrybaApp(Adw.Application):
+class SheptApp(Adw.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID)
 
     def do_activate(self) -> None:
-        win = self.get_active_window() or SkrybaWindow(self)
+        win = self.get_active_window() or SheptWindow(self)
         win.present()
 
 
 def main() -> int:
     # Missing tools and models are reported in the window instead of aborting
     # here: a desktop-menu launch has nowhere to show a stderr message.
+    GLib.set_application_name("Shept")
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-    return SkrybaApp().run(sys.argv)
+    return SheptApp().run(sys.argv)

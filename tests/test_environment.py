@@ -1,4 +1,4 @@
-"""Tests for skryba.environment — model discovery, distro, locale, backend.
+"""Tests for shept.environment — model discovery, distro, locale, backend.
 
 These must run without PyGObject/GTK installed: nothing here imports `gi`.
 """
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from skryba import environment
+from shept import environment
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def fake_home(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    monkeypatch.delenv("SKRYBA_MODEL_DIR", raising=False)
+    monkeypatch.delenv("SHEPT_MODEL_DIR", raising=False)
     return home
 
 
@@ -47,7 +47,7 @@ def _make_model(path: Path) -> Path:
 
 def test_model_search_paths_defaults(fake_home):
     assert environment.model_search_paths() == [
-        fake_home / ".local" / "share" / "skryba" / "models",
+        fake_home / ".local" / "share" / "shept" / "models",
         fake_home / ".local" / "share" / "whisper-cpp" / "models",
         fake_home / ".cache" / "whisper.cpp" / "models",
         Path("/usr/share/whisper-cpp/models"),
@@ -61,30 +61,30 @@ def test_model_search_paths_honours_xdg_data_home(fake_home, tmp_path, monkeypat
 
     paths = environment.model_search_paths()
 
-    assert paths[0] == data / "skryba" / "models"
+    assert paths[0] == data / "shept" / "models"
     assert paths[1] == data / "whisper-cpp" / "models"
-    assert fake_home / ".local" / "share" / "skryba" / "models" not in paths
+    assert fake_home / ".local" / "share" / "shept" / "models" not in paths
 
 
 def test_model_search_paths_override_is_first_and_expanded(fake_home, monkeypatch):
-    monkeypatch.setenv("SKRYBA_MODEL_DIR", "~/whisper-models")
+    monkeypatch.setenv("SHEPT_MODEL_DIR", "~/whisper-models")
 
     paths = environment.model_search_paths()
 
     assert paths[0] == fake_home / "whisper-models"
-    assert paths[1] == fake_home / ".local" / "share" / "skryba" / "models"
+    assert paths[1] == fake_home / ".local" / "share" / "shept" / "models"
 
 
 def test_model_search_paths_priority_order(fake_home, tmp_path, monkeypatch):
     data = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data))
-    monkeypatch.setenv("SKRYBA_MODEL_DIR", "/opt/models")
+    monkeypatch.setenv("SHEPT_MODEL_DIR", "/opt/models")
 
     paths = environment.model_search_paths()
 
     assert paths == [
         Path("/opt/models"),
-        data / "skryba" / "models",
+        data / "shept" / "models",
         data / "whisper-cpp" / "models",
         fake_home / ".cache" / "whisper.cpp" / "models",
         Path("/usr/share/whisper-cpp/models"),
@@ -95,12 +95,12 @@ def test_model_search_paths_priority_order(fake_home, tmp_path, monkeypatch):
 def test_model_search_paths_deduplicates(fake_home, tmp_path, monkeypatch):
     data = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data))
-    monkeypatch.setenv("SKRYBA_MODEL_DIR", str(data / "skryba" / "models"))
+    monkeypatch.setenv("SHEPT_MODEL_DIR", str(data / "shept" / "models"))
 
     paths = environment.model_search_paths()
 
     assert len(paths) == len(set(paths))
-    assert paths.count(data / "skryba" / "models") == 1
+    assert paths.count(data / "shept" / "models") == 1
 
 
 def test_model_display_name_strips_ggml_wrapper():

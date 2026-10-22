@@ -13,7 +13,7 @@ from pathlib import Path
 
 MODEL_GLOB = "ggml-*.bin"
 MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
-README_URL = "https://github.com/psampir/skryba#install"
+README_URL = "https://github.com/psampir/shept#install"
 
 REQUIRED_TOOLS = ("whisper-cli", "ffmpeg")
 
@@ -115,14 +115,14 @@ def model_search_paths() -> list[Path]:
     """Directories searched for models, highest priority first."""
     data_home = os.environ.get("XDG_DATA_HOME", "")
     data_dir = Path(data_home) if data_home else Path.home() / ".local" / "share"
-    override = os.environ.get("SKRYBA_MODEL_DIR", "")
+    override = os.environ.get("SHEPT_MODEL_DIR", "")
 
     wanted: list[Path] = []
     if override:
         wanted.append(Path(override).expanduser())
     wanted.extend(
         [
-            data_dir / "skryba" / "models",
+            data_dir / "shept" / "models",
             data_dir / "whisper-cpp" / "models",
             Path.home() / ".cache" / "whisper.cpp" / "models",
             Path("/usr/share/whisper-cpp/models"),
