@@ -24,35 +24,35 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
 
 ## What it does
 
-- Add any audio or video file to a queue — mp3, wav, m4a, ogg, opus, flac,
-  aac, mp4, mkv, mov, webm, avi, … — with the file dialog, drag & drop, or the
+- Add any audio or video file to a queue (mp3, wav, m4a, ogg, opus, flac,
+  aac, mp4, mkv, mov, webm, avi, …) with the file dialog, drag & drop, or the
   command line
 - Transcribe locally with a Whisper model of your choice, one file after
   another, so a batch can run unattended
 - Download models from inside the app, with progress and cancellation
 - Skip silence with whisper.cpp's Silero VAD, so silent stretches never reach
   the model and are not hallucinated into text
-- Every language whisper.cpp supports — all 100, auto-detect included — behind
+- Every language whisper.cpp supports (all 100, auto-detect included) behind
   a searchable picker with fuzzy matching and starred favourites
 - Remember the model, language, favourites and silence choice between runs
 - Streams output as it transcribes, with a per-file progress bar and a summary
   when the batch ends
 - Copy or save the selected file's transcript, or export every finished file
-  at once — `.txt`, `.srt`, `.vtt`, `.lrc` or `.json`
+  at once: `.txt`, `.srt`, `.vtt`, `.lrc` or `.json`
 
 Everything runs on your machine: no accounts, no uploads, no network access
 during transcription. The only network access is a model download you start
-yourself; no daemons or background processes either — `whisper-cli` is launched
+yourself; no daemons or background processes either: `whisper-cli` is launched
 on demand and exits when done, and the model is loaded into memory only for the
 duration of a run.
 
-Only file transcription is supported — there is no microphone / live mode.
+Only file transcription is supported: there is no microphone / live mode.
 
 ## Requirements
 
 - Python 3.10+
-- GTK 4, libadwaita and PyGObject (`gi`) — system packages, not pip installs
-- `ffmpeg` and `ffprobe` — Shept checks for both at startup and names the
+- GTK 4, libadwaita and PyGObject (`gi`): system packages, not pip installs
+- `ffmpeg` and `ffprobe`: Shept checks for both at startup and names the
   missing one in the banner; without `ffprobe` transcription still works, but
   progress stays at 0 % for the whole file
 - `whisper-cli` from whisper.cpp (1.7 or newer)
@@ -78,7 +78,7 @@ flatpak install --user shept.flatpak
 
 GPU drivers are deliberately not bundled: Vulkan comes from the host through
 `--device=dri`, so driver updates keep working. Models are shared with a native
-install — see [Models](#models).
+install (see [Models](#models)).
 
 ### Wheel
 
@@ -142,7 +142,7 @@ paru -S whisper.cpp-vulkan
 ### Other distributions
 
 If no package exists for your distribution, build `whisper-cli` from source as
-shown in the Debian/Ubuntu section above — the CMake steps are the same
+shown in the Debian/Ubuntu section above; the CMake steps are the same
 everywhere. Make sure the resulting binary and any shared libraries are
 reachable through `PATH` and the dynamic linker.
 
@@ -159,7 +159,7 @@ whisper-cli -m /dev/null /tmp/silence.wav 2>&1 | grep -E "Vulkan|backend"
 
 If the output mentions a Vulkan device and `whisper_backend_init_gpu`, GPU
 acceleration is active. If it only mentions CPU, the Vulkan build was not
-picked up — check that `vulkaninfo` reports your GPU and rebuild with
+picked up: check that `vulkaninfo` reports your GPU and rebuild with
 `-DGGML_VULKAN=1`.
 
 ## Models
@@ -167,11 +167,11 @@ picked up — check that `vulkaninfo` reports your GPU and rebuild with
 Models are **not bundled** with Shept. Drop one (or more) `ggml-*.bin` files
 into any of the directories Shept searches, in this order:
 
-1. `$SHEPT_MODEL_DIR` — set this to keep models somewhere else entirely
-2. **folders you added in the app** — see [Adding your own folders](#adding-your-own-folders)
+1. `$SHEPT_MODEL_DIR`: set this to keep models somewhere else entirely
+2. **folders you added in the app**: see [Adding your own folders](#adding-your-own-folders)
 3. `$XDG_DATA_HOME/shept/models` (`~/.local/share/shept/models`)
-4. `$XDG_DATA_HOME/whisper-cpp/models` — whisper.cpp's own convention
-5. `~/.cache/whisper.cpp/models` — older upstream default
+4. `$XDG_DATA_HOME/whisper-cpp/models`, whisper.cpp's own convention
+5. `~/.cache/whisper.cpp/models`, older upstream default
 6. `/usr/share/whisper-cpp/models`
 7. `/usr/local/share/whisper-cpp/models`
 
@@ -187,7 +187,7 @@ Open **Manage…** next to the model row to see the models Shept can fetch. Each
 entry shows its size and what it is good for; press **Download** to fetch it.
 Progress is shown per model, a download can be cancelled at any time, and
 closing the window cancels the active transfer. A finished model appears in the
-model dropdown immediately and is selected — no restart needed.
+model dropdown immediately and is selected without a restart.
 
 Downloads always go to `$XDG_DATA_HOME/shept/models`, which is
 `~/.local/share/shept/models` by default. That is the first directory Shept
@@ -197,14 +197,14 @@ source checkout. A transfer is written as `ggml-<model>.bin.part` and only
 renamed once it is complete, so an interrupted download never shows up in the
 dropdown; the partial file is deleted on failure or cancellation, and any
 leftover from an earlier crash is removed the next time the folder is opened.
-There is no checksum to verify against — HuggingFace does not publish per-file
-hashes — so Shept only checks the downloaded size against the published one.
+There is no checksum to verify against (HuggingFace does not publish per-file
+hashes), so Shept only checks the downloaded size against the published one.
 
 ### Adding your own folders
 
 The same **Manage…** window lists every directory Shept searches, labelled with
 why it is searched (`SHEPT_MODEL_DIR`, *Added by you*, *Default*, *System*).
-Press **Add folder…** to point Shept at models kept elsewhere — an external
+Press **Add folder…** to point Shept at models kept elsewhere: an external
 drive, a shared network folder, a hand-curated collection. Folders you add are
 saved to `settings.json`, keep their order, and are searched before the default
 locations, so adding one is enough to make its models win over a duplicate
@@ -224,12 +224,12 @@ flatpak override --user --filesystem=/mnt/disk/models io.github.psampir.Shept
 Each installed model in **Manage…** has a trash button, but only where Shept can
 actually remove the file: the containing directory has to be writable. Models in
 `~/.local/share/whisper-cpp/models` or `/usr/share/whisper-cpp/models` are
-read-only inside the Flatpak, so those rows show a lock instead — deleting them
+read-only inside the Flatpak, so those rows show a lock instead: deleting them
 there would only fail, and Shept says so up front rather than after the fact.
 Deletion is disabled while the queue is running, asks for confirmation, and
 removes a symlink rather than the file it points to.
 
-Recommended: **`large-v3-turbo`** (~1.62 GB, f16) — the best accuracy/speed
+Recommended: **`large-v3-turbo`** (~1.62 GB, f16), the best accuracy/speed
 balance for most languages, including non-English ones.
 
 To download by hand instead:
@@ -253,7 +253,7 @@ Available models:
 | `tiny`                | 0.08 GB   | poorest     | very fast   |
 
 Substitute `ggml-<model>.bin` in the URL above for any of these. Avoid the
-`.en` variants unless you only ever transcribe English — they are
+`.en` variants unless you only ever transcribe English, since they are
 English-only.
 
 If you installed the Fedora COPR package, it also ships a download helper:
@@ -281,7 +281,7 @@ command.
 2. Pick a **Model** (`large-v3-turbo` is selected automatically if present).
    Press **Manage…** to download one if the list is empty or you want another.
 3. Pick the source **Language** with **Choose…**. The picker holds every
-   language whisper.cpp supports — 100 of them — and filters as you type:
+   language whisper.cpp supports (100 of them) and filters as you type:
    `ukr` finds Ukrainian, `jpn` finds Japanese, and matching is a case-
    insensitive subsequence search over both the name and the code, so
    `pol` puts Polish first without you having to remember the whole word. The
@@ -289,19 +289,19 @@ command.
    **Auto-detect** whenever the search box is empty. Enter takes the first
    match, Escape closes the picker. The language defaults to your system
    locale when whisper supports it, otherwise auto-detect. Leave **Skip
-   silence** on — it is the default whenever the VAD asset is installed. See
+   silence** on: it is the default whenever the VAD asset is installed. See
    [Skipping silence](#skipping-silence) for what it changes and how to fetch
    the asset.
-4. Click **Transcribe all** — the button reads **Transcribe** when exactly one
+4. Click **Transcribe all**: the button reads **Transcribe** when exactly one
    file is waiting. Files are processed one at a time: the active row shows
    `Transcribing…` with its own progress bar, the overall progress bar tracks
-   the current file, and finished rows are marked `Done — N segments`.
+   the current file, and finished rows are marked `Done: N segments`.
    **Cancel** abandons the file that is running (it is marked `Cancelled`) and
    leaves the rest pending, so pressing **Transcribe all** again resumes the
    queue where it stopped.
 5. Select a row to read that file's transcript in the text view. The running
    file is selected automatically, and switching rows keeps everything that
-   was already transcribed — segments stay attached to their file.
+   was already transcribed: segments stay attached to their file.
 6. Use the toolbar buttons to **copy** the selected transcript as plain text,
    or open the **save** menu:
    - **Selected file** writes that one transcript in the chosen format:
@@ -312,7 +312,7 @@ command.
    - **Export all…** asks for a folder and writes every file that finished
      successfully into it as `<file name>.<ext>`; failed and cancelled rows are
      skipped, as are files that produced no text. An existing file in that
-     folder is never overwritten — the new one gets ` (2)`, ` (3)` appended —
+     folder is never overwritten (the new one gets ` (2)`, ` (3)` appended),
      and very long file names are shortened so the batch cannot stop on a
      name-length error. It uses the format you last picked in **Selected
      file** (plain text until you pick one).
@@ -322,7 +322,7 @@ command.
 ### Skipping silence
 
 Whisper does not like silence. Give it a clean recording with twenty quiet
-seconds at the end and it tends to invent something — "thank you for watching",
+seconds at the end and it tends to invent something: "thank you for watching",
 "for more information, visit www.fema.org", a repeat of the last sentence.
 Those segments are pure fiction, and they end up in every export.
 
@@ -355,7 +355,7 @@ curl -L -o ~/.local/share/shept/models/ggml-silero-v6.2.0.bin \
 
 VAD removes silent stretches from the audio that whisper analyses, so the
 speech that remains keeps its position in the file and the timestamps in the
-subtitle exports stay correct. It affects transcription only — the audio file
+subtitle exports stay correct. It affects transcription only: the audio file
 itself is never modified. The VAD threshold and padding knobs whisper.cpp
 exposes are not in the interface; they are left at upstream's defaults.
 
@@ -371,13 +371,13 @@ $XDG_CONFIG_HOME/shept/settings.json     # ~/.config/shept/settings.json
 Favourites live in the same file as a `favourites` list of language codes, in
 the order you starred them; starring or unstarring a language in the picker
 writes the file straight away. The list is read tolerantly, so a hand-edited
-file survives a stray code, a duplicate or an entry of the wrong type — those
+file survives a stray code, a duplicate or an entry of the wrong type; those
 are simply dropped.
 
 Delete that file to return to the defaults: the model Shept picks on a fresh
 install, the language your locale implies, no favourites, and Skip silence on
-only when the VAD asset is available. The file is written atomically — a crash
-while saving cannot leave a half-written one behind — and it is read
+only when the VAD asset is available. The file is written atomically (a crash
+while saving cannot leave a half-written one behind), and it is read
 defensively: a damaged file, unknown language code or wrongly typed value is
 ignored, and a model that has since been removed from disk silently gives way
 to the default selection.
@@ -387,7 +387,7 @@ to the default selection.
 Shept does not translate. Whisper's built-in translation only produces English
 and is considerably worse than dedicated machine translation. If you need
 another language, export the transcript as subtitles (`.srt`) and translate
-that file with the tool of your choice — DeepL, for instance, accepts `.srt`
+that file with the tool of your choice: DeepL, for instance, accepts `.srt`
 and keeps the timestamps intact.
 
 ### Desktop launcher (source checkout only)
@@ -433,8 +433,8 @@ Files are transcribed strictly one after another. Decoding and whisper-cli are
 already CPU/GPU-bound, so running two of them at once would make both slower and
 the progress bars meaningless. Each file's temporary WAV is removed as soon as
 its run ends, along with the log the tools write their diagnostics to. If a file
-fails — an unreadable container, a missing codec, a non-zero exit from
-whisper-cli — its row is marked `Failed` with a short reason and the batch
+fails (an unreadable container, a missing codec, a non-zero exit from
+whisper-cli), its row is marked `Failed` with a short reason and the batch
 continues with the next file instead of stopping.
 
 ## Performance notes
@@ -454,52 +454,52 @@ continues with the next file instead of stopping.
 
 ## Troubleshooting
 
-**"whisper-cli not found in PATH"** — install it (see [Install](#install)) and
+**"whisper-cli not found in PATH"**: install it (see [Install](#install)) and
 make sure `which whisper-cli` returns a path. Shept shows the missing tool in a
 banner at the top of the window together with the install command for your
 distribution, and keeps **Transcribe all** disabled until it is available.
 
-**"ffmpeg not found in PATH"** — install `ffmpeg` with your distribution's
+**"ffmpeg not found in PATH"**: install `ffmpeg` with your distribution's
 package manager; the same banner explains how.
 
-**"ffprobe not found in PATH"** — `ffprobe` ships with `ffmpeg`, so the usual
+**"ffprobe not found in PATH"**: `ffprobe` ships with `ffmpeg`, so the usual
 cause is a split package (`ffmpeg-free` without the probe) or a `PATH` that
 only holds one of them. Installing `ffmpeg` fixes it. Transcription still works
 without it, but the progress bars cannot follow the file and stay at 0 %.
 
-**One row says "Failed: …"** — that file could not be processed (damaged or
+**One row says "Failed: …"**: that file could not be processed (damaged or
 unsupported container, missing codec, whisper-cli exited non-zero, a corrupt
 model). The row's subtitle carries the first lines of the reason; hover it to
 see the complete output from the failing tool, which is what a bug report
 needs. The rest of the queue keeps running. Remove the row, fix the file, and
 add it again.
 
-**Model dropdown shows "(no models found)"** — no `ggml-*.bin` file was found in
+**Model dropdown shows "(no models found)"**: no `ggml-*.bin` file was found in
 any of the directories listed under [Models](#models); the window lists the
 paths it searched. Press **Manage…** to download one from inside the app, or
 drop a file there by hand. Filenames must start with `ggml-` and end with
 `.bin`. Set `SHEPT_MODEL_DIR` if your models live elsewhere.
 
-**No GPU acceleration / very slow** — see *Checking GPU acceleration* above.
+**No GPU acceleration / very slow**: see *Checking GPU acceleration* above.
 On Debian/Ubuntu, double-check that you built with `-DGGML_VULKAN=1` and that
 `libvulkan-dev` was installed.
 
-**Output is garbled or English-looking for a non-English language** — you are
+**Output is garbled or English-looking for a non-English language**: you are
 probably using a `.en` model. Pick a multilingual one (any model name without
 an `.en` suffix).
 
-**Random nonsense at the end of long files** — Whisper hallucinates during
+**Random nonsense at the end of long files**: Whisper hallucinates during
 silence, so a recording with a long quiet tail often ends in invented text.
 Leave **Skip silence** on (see [Skipping silence](#skipping-silence)); if the
 VAD asset is missing, press **Download** in the hint under the switch. As a
 fallback you can trim silence with ffmpeg (`-af silenceremove`) before adding
 the file.
 
-**The Flatpak ignores my GTK theme** — expected, and not specific to Shept.
+**The Flatpak ignores my GTK theme**: expected, and not specific to Shept.
 Shept uses libadwaita, which draws itself with Adwaita and deliberately ignores
 `GTK_THEME`; GTK3 had Flatpak theme extensions, GTK4 has no equivalent. On the
 host your theme is applied by `~/.config/gtk-4.0/gtk.css`, which is loaded after
-libadwaita's stylesheet and overrides its colours — but Flatpak gives every app
+libadwaita's stylesheet and overrides its colours, but Flatpak gives every app
 its own `$XDG_CONFIG_HOME`, so that file is invisible inside the sandbox.
 
 To apply your theme to this app only, link the theme's `gtk-4.0` directory into
@@ -529,6 +529,6 @@ tag.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). `whisper.cpp` and the Whisper models are
+MIT; see [LICENSE](LICENSE). `whisper.cpp` and the Whisper models are
 distributed under their own licenses (MIT for whisper.cpp); none of them are
 bundled with Shept.

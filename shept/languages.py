@@ -6,7 +6,7 @@ module, and both are tested without PyGObject installed.
 The table is the one whisper.cpp itself uses, taken from the `g_lang` map in
 `src/whisper.cpp` at tag `v1.8.4` (the tag Shept pins). It is the authoritative
 list: every code here is accepted by `whisper-cli -l`, and nothing else is.
-`auto` is not part of it — it is a Shept-level choice, not a whisper language,
+`auto` is not part of it: it is a Shept-level choice, not a whisper language,
 so it lives in `AUTO` and is only offered alongside the real entries.
 """
 

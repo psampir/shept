@@ -70,7 +70,7 @@ jobs:
   flatpak:
     name: Flatpak bundle
     # The bundle is what most users install, so the manifest has to be exercised
-    # on every change that can affect it — but a cold build of whisper.cpp and
+    # on every change that can affect it, but a cold build of whisper.cpp and
     # ffmpeg is ~20 min, so pull requests to dev are left to the fast jobs.
     if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest

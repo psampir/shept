@@ -36,7 +36,7 @@ ORIGIN_SYSTEM = "System"
 RUN_TOOLS = ("whisper-cli", "ffmpeg")
 
 #: Everything the window checks at startup. ffprobe is here so a missing probe
-#: is visible instead of silently pinning every progress bar at 0 % — but it is
+#: is visible instead of silently pinning every progress bar at 0 %, but it is
 #: not in `RUN_TOOLS`, because transcription itself does not need it.
 REQUIRED_TOOLS = (*RUN_TOOLS, "ffprobe")
 
@@ -271,7 +271,7 @@ def install_hint(tool: str) -> str:
         # Distributions' package managers are not available in the sandbox:
         # a missing tool means the Flatpak itself is broken.
         return (
-            f"this Flatpak is missing a bundled tool — please report it at {ISSUES_URL}"
+            f"this Flatpak is missing a bundled tool: please report it at {ISSUES_URL}"
         )
     hint = _DISTRO_HINTS.get(detect_distro(), {}).get(tool)
     if hint is not None:
@@ -296,7 +296,7 @@ def default_language() -> str:
 
     # Most locales name a 2-letter language, but whisper also has 3-letter
     # codes (haw, yue), so try the whole base first and then its first two
-    # letters — "haw_US" must not degrade to Hausa ("ha").
+    # letters: "haw_US" must not degrade to Hausa ("ha").
     for candidate in (base, base[:2]):
         if language_by_code(candidate) is not None:
             return candidate
@@ -312,8 +312,8 @@ def discover_models(extra: Sequence[Path] = ()) -> list[Path]:
     """
     seen: set[str] = set()
     models: list[Path] = []
-    # Called without the argument when there is nothing extra, so a caller —
-    # or a test — that replaced `model_search_paths` with a no-argument
+    # Called without the argument when there is nothing extra, so a caller
+    # (or a test) that replaced `model_search_paths` with a no-argument
     # stand-in keeps working.
     directories = model_search_paths(extra) if extra else model_search_paths()
     for directory in directories:

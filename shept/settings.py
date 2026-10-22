@@ -2,7 +2,7 @@
 
 GTK-free on purpose: this module is imported by `shept.app` but is also the
 subject of unit tests that run without PyGObject installed. Reading is
-deliberately forgiving — a missing file, a half-written one or a value the app
+deliberately forgiving: a missing file, a half-written one or a value the app
 no longer understands must never stop Shept from starting, so `load()` always
 returns a usable `Settings`.
 """
@@ -99,7 +99,7 @@ def load(path: Path | None = None) -> Settings:
 
     Every failure mode degrades instead of raising: an unreadable or malformed
     file, a JSON document that is not an object, unknown or wrongly typed
-    values. Unknown model names are kept as they are — whether that model is
+    values. Unknown model names are kept as they are; whether that model is
     installed is a question for the window, which falls back to the default
     selection when it is not.
     """
@@ -134,7 +134,7 @@ def save(settings: Settings, path: Path | None = None) -> Path:
     The JSON is written to `<name>.tmp` in the same directory, flushed and
     fsynced, then moved into place with `os.replace`, so a crash mid-write
     cannot leave a truncated settings file behind for the next start to trip
-    over — and a crash right after the replace cannot lose the new content
+    over, and a crash right after the replace cannot lose the new content
     either.
     """
     target = Path(path) if path is not None else settings_path()

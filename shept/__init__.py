@@ -1,4 +1,4 @@
-"""Shept — a GTK4 + libadwaita frontend for whisper-cli.
+"""Shept: a GTK4 + libadwaita frontend for whisper-cli.
 
 This module must stay importable without GTK: the test suite runs on machines
 where PyGObject is not installed. Everything that needs `gi` lives in

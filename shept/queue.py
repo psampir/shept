@@ -59,7 +59,7 @@ class Job:
 
     @property
     def display_name(self) -> str:
-        """The file name alone — rows show names, tooltips show full paths."""
+        """The file name alone: rows show names, tooltips show full paths."""
         return self.path.name
 
     @property
@@ -127,7 +127,7 @@ class Queue:
 
         A cancel that lands between two jobs must not consume the next one:
         marking it RUNNING and then abandoning the batch would leave it
-        unreachable — no retry, and `next_pending()` skips it from then on.
+        unreachable: no retry, and `next_pending()` skips it from then on.
         So the cancel flag is checked before anything is mutated.
         """
         if cancelled:
@@ -221,8 +221,8 @@ def export_all(jobs: Iterable[Job], fmt: str, dest_dir: Path) -> list[Path]:
     hold a partial transcript, and "Export all" must not pass half a recording
     off as the result. Jobs without segments (pending, or failed before the
     first segment) are skipped too, so a half-run queue never creates empty
-    files. Files already in `dest_dir` are never overwritten — the new one gets
-    ` (2)`, ` (3)`, … appended — and over-long stems are cut so `NAME_MAX`
+    files. Files already in `dest_dir` are never overwritten (the new one gets
+    ` (2)`, ` (3)`, … appended), and over-long stems are cut so `NAME_MAX`
     cannot abort the batch midway. Returns the paths written, in queue order.
     """
     formatter = EXPORTERS.get(fmt)

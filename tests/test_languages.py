@@ -1,4 +1,4 @@
-"""Tests for shept.languages — the whisper table and the fuzzy matcher.
+"""Tests for shept.languages: the whisper table and the fuzzy matcher.
 
 These must run without PyGObject: nothing here imports `gi`.
 """

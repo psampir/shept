@@ -69,7 +69,7 @@ CATALOG: tuple[ModelSpec, ...] = (
     _spec(
         "large-v3-turbo-q5_0",
         574_041_195,
-        "same model, quantized — a third of the size",
+        "same model, quantized: a third of the size",
     ),
     _spec(
         "small",
@@ -230,13 +230,13 @@ def vad_state_text(
         )
     if state is VadState.DOWNLOADING:
         subtitle = (
-            f"Downloading Silero VAD — {detail}"
+            f"Downloading Silero VAD: {detail}"
             if detail
             else f"Downloading Silero VAD ({human_size(size_bytes)})…"
         )
         return title, subtitle, "Downloading…"
     if state is VadState.FAILED:
-        subtitle = f"Download failed — {detail}." if detail else "Download failed."
+        subtitle = f"Download failed: {detail}." if detail else "Download failed."
         return title, subtitle, "Retry"
     raise ValueError(f"unknown VAD state: {state!r}")
 
@@ -332,8 +332,8 @@ def is_deletable(path: Path) -> bool:
     """True when Shept can actually remove `path`.
 
     Both conditions are checked rather than assumed: the containing directory
-    must be writable — unlinking a file needs write access to the directory,
-    not to the file — and the file must not live in a system directory. Inside
+    must be writable (unlinking a file needs write access to the directory,
+    not to the file), and the file must not live in a system directory. Inside
     the Flatpak the manifest grants `home:ro`, so `~/.local/share/whisper-cpp/
     models` looks writable by its mode bits while `access(W_OK)` still refuses
     it; those rows get a lock icon instead of a trash button that could only
@@ -414,7 +414,7 @@ def download(
     request = Request(spec.url, headers={"User-Agent": USER_AGENT})
     received = 0
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 — https URL
+        with urlopen(request, timeout=30) as response:  # noqa: S310  # https URL
             total = int(response.headers.get("Content-Length") or 0)
             if progress is not None:
                 progress(0, total)

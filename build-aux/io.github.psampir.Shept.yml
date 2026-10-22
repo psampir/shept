@@ -1,4 +1,4 @@
-# Flatpak manifest for Shept. Local builds only — not submitted to Flathub yet.
+# Flatpak manifest for Shept. Local builds only: not submitted to Flathub yet.
 #
 # FFmpeg is rebuilt here even though org.gnome.Platform already ships the codec
 # libraries: the runtime has no `ffmpeg` / `ffprobe` executables, and Shept
@@ -8,7 +8,7 @@
 #
 #   (a) ggml-vulkan needs `glslc` (shaderc) at configure time. It may or may not
 #       be part of org.gnome.Sdk. If the whisper-cpp cmake step reports Vulkan
-#       as disabled, add a `shaderc` module before whisper-cpp — or drop
+#       as disabled, add a `shaderc` module before whisper-cpp, or drop
 #       -DGGML_VULKAN=ON and ship a CPU-only build, which still works.
 #   (b) The `shept` module uses `type: dir` / `path: ..`, which only works for
 #       builds from a local checkout. The Flathub submission must replace it

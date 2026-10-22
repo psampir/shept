@@ -1,4 +1,4 @@
-"""Tests for shept.transcribe — argv building, parsing and export formats."""
+"""Tests for shept.transcribe: argv building, parsing and export formats."""
 
 from __future__ import annotations
 

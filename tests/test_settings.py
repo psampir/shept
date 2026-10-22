@@ -1,4 +1,4 @@
-"""Tests for shept.settings — persistence, tolerance and atomic writes.
+"""Tests for shept.settings: persistence, tolerance and atomic writes.
 
 These must run without PyGObject: nothing here imports `gi`.
 """

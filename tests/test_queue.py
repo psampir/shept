@@ -1,4 +1,4 @@
-"""Tests for shept.queue — the GTK-free batch queue model."""
+"""Tests for shept.queue: the GTK-free batch queue model."""
 
 from __future__ import annotations
 

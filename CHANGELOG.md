@@ -15,7 +15,7 @@ First release.
 - Local transcription of audio and video files with `whisper-cli` from
   whisper.cpp. `ffmpeg` decodes each file to a temporary 16 kHz mono WAV,
   whisper.cpp transcribes it, and the transcript streams into the window as it
-  is produced — no uploads, no accounts, no background daemon.
+  is produced: no uploads, no accounts, no background daemon.
 
 - A GTK4 / libadwaita interface, with the queue, the model and language rows
   and the transcript in a single window.
@@ -26,8 +26,8 @@ First release.
   when the batch ends. A failed file is marked in its row and does not stop the
   rest of the queue.
 
-- Five export formats — plain text (`.txt`), SubRip (`.srt`), WebVTT (`.vtt`),
-  lyrics (`.lrc`) and timed JSON (`.json`) — for the selected file, or for every
+- Five export formats: plain text (`.txt`), SubRip (`.srt`), WebVTT (`.vtt`),
+  lyrics (`.lrc`) and timed JSON (`.json`), for the selected file, or for every
   finished file into one folder at once. Copying the selected transcript to the
   clipboard uses the same text.
 
@@ -35,12 +35,12 @@ First release.
   what they are good for, downloads show progress, can be cancelled, and a
   finished model appears in the model dropdown immediately.
 
-- Model discovery across several directories — `$SHEPT_MODEL_DIR`,
+- Model discovery across several directories (`$SHEPT_MODEL_DIR`,
   `$XDG_DATA_HOME/shept/models`, `$XDG_DATA_HOME/whisper-cpp/models`,
   `~/.local/share/whisper-cpp/models` (searched even when `$XDG_DATA_HOME`
   points elsewhere, which is what makes models visible inside the Flatpak
   sandbox), `~/.cache/whisper.cpp/models`, `/usr/share/whisper-cpp/models` and
-  `/usr/local/share/whisper-cpp/models` — with the first directory winning when
+  `/usr/local/share/whisper-cpp/models`), with the first directory winning when
   a model exists in more than one.
 
 - A language selector that defaults to the system locale when Shept supports
@@ -59,8 +59,8 @@ First release.
 
 - **Delete models from the app**: every installed model in the **Manage…**
   window gets a trash button, shown only where the file is genuinely removable
-  (the directory must be writable). Read-only locations — system directories,
-  and `~/.local/share/whisper-cpp/models` inside the Flatpak sandbox — show a
+  (the directory must be writable). Read-only locations (system directories,
+  and `~/.local/share/whisper-cpp/models` inside the Flatpak sandbox) show a
   lock instead of a button that could only fail. Deletion asks first, is
   disabled while the queue runs, unlinks a symlink rather than its target, and
   the dropdown falls back to `large-v3-turbo` or the next model when the
@@ -78,12 +78,12 @@ First release.
   `src/whisper.cpp` at the pinned tag instead of a copy that can drift. That
   includes `yue` (Cantonese), `haw` (Hawaiian) and every other three-letter
   code, and locale detection now recognises them too. Languages can be matched
-  fuzzily by name or code — `ukr` finds Ukrainian, `jpn` finds Japanese — with
+  fuzzily by name or code (`ukr` finds Ukrainian, `jpn` finds Japanese) with
   results ranked so a prefix beats a word-start match and scattered letters
   come last.
 
 - **A searchable language picker, with favourites**: the Language row is an
-  `Adw.ActionRow` with a **Choose…** button that opens a picker window — a
+  `Adw.ActionRow` with a **Choose…** button that opens a picker window: a
   search box, a live-filtered list and a star on every row. Typing filters
   through the fuzzy matcher, Enter takes the first match, Escape closes the
   window and the arrow keys walk the list, so a language is a few keystrokes

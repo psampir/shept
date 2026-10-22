@@ -1,4 +1,4 @@
-"""Tests for shept.environment — model discovery, distro, locale, backend.
+"""Tests for shept.environment: model discovery, distro, locale, backend.
 
 These must run without PyGObject/GTK installed: nothing here imports `gi`.
 """
@@ -124,7 +124,7 @@ def test_model_search_paths_searches_xdg_and_home(fake_home, monkeypatch):
 
 
 def test_model_search_paths_default_home_appears_once(fake_home):
-    """With no XDG override, the home data dir is reached twice — dedupe it."""
+    """With no XDG override, the home data dir is reached twice, so dedupe it."""
     paths = environment.model_search_paths()
 
     shared = fake_home / ".local" / "share" / "whisper-cpp" / "models"

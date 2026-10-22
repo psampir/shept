@@ -1,4 +1,4 @@
-"""Shept — a GTK4 + libadwaita frontend for whisper-cli.
+"""Shept: a GTK4 + libadwaita frontend for whisper-cli.
 
 This is the only module that imports `gi`; the rest of the package is
 GTK-free so it can be tested without PyGObject.
@@ -273,7 +273,7 @@ class SheptWindow(Adw.ApplicationWindow):
         if self._missing_tools:
             names = " and ".join(self._missing_tools)
             hint = install_hint(self._missing_tools[0])
-            banner = Adw.Banner(title=f"{names} not found — {hint}")
+            banner = Adw.Banner(title=f"{names} not found: {hint}")
             banner.set_tooltip_text(f"Missing: {names}")
             banner.set_revealed(True)
             outer.append(banner)
@@ -643,7 +643,7 @@ class SheptWindow(Adw.ApplicationWindow):
 
         A deletion that hits the selected model leaves nothing selected, which
         would make Transcribe useless until the user picks another one, so the
-        next best model is selected instead — and when no model is left the
+        next best model is selected instead, and when no model is left the
         window falls back to its "no models" state, hint included.
         """
         name = model_display_name(path)
@@ -686,13 +686,13 @@ class SheptWindow(Adw.ApplicationWindow):
         """Return why Transcribe is unavailable, or "" when it is available."""
         if self._blocking_tools:
             names = " and ".join(self._blocking_tools)
-            return f"Missing {names} — {install_hint(self._blocking_tools[0])}"
+            return f"Missing {names}: {install_hint(self._blocking_tools[0])}"
         if not self._models:
-            return "No Whisper model found — see the hint below the model row."
+            return "No Whisper model found. See the hint below the model row."
         if not self.queue.jobs:
             return "Add an audio file first."
         if not self.queue.has_pending:
-            return "Nothing left to transcribe — add a file or clear the list."
+            return "Nothing left to transcribe. Add a file or clear the list."
         return ""
 
     def _update_run_state(self) -> None:
@@ -725,7 +725,7 @@ class SheptWindow(Adw.ApplicationWindow):
         """Stop the running child before the window and the app go away.
 
         Returning False lets the close continue. Without this the worker
-        thread — a daemon — dies with the interpreter while whisper-cli or
+        thread (a daemon) dies with the interpreter while whisper-cli or
         ffmpeg keeps running as an orphan, still loading the GPU. The waits
         here are bounded so closing stays responsive.
         """
@@ -739,7 +739,7 @@ class SheptWindow(Adw.ApplicationWindow):
         return False
 
     def _cancel_batch(self) -> None:
-        """Stop the running job — the Cancel button and close-request share this.
+        """Stop the running job: the Cancel button and close-request share this.
 
         Marking the batch cancelled and stopping the child live in one place so
         closing the window mid-run cannot behave differently from pressing
@@ -968,20 +968,20 @@ class SheptWindow(Adw.ApplicationWindow):
             if self._vad_model is None:
                 self._set_vad_state(VadState.MISSING)
                 self.status.set_text(
-                    "Silero VAD file disappeared — press Download to fetch it again."
+                    "Silero VAD file disappeared. Press Download to fetch it again."
                 )
         if row.get_active() and self._vad_model is None:
             # Re-applying the current state puts the row back exactly as it
             # was: switch off, hint visible, and a failure message intact.
             self._set_vad_state(self._vad_state)
             self.status.set_text(
-                "Silero VAD is not installed — press Download to fetch it."
+                "Silero VAD is not installed. Press Download to fetch it."
             )
             return
         self._save_settings()
 
     def _on_vad_download(self, _btn: Gtk.Button) -> None:
-        """Fetch the Silero VAD asset — only when the user asks for it."""
+        """Fetch the Silero VAD asset, but only when the user asks for it."""
         if self._vad_model is not None or self._vad_state is VadState.DOWNLOADING:
             return
         self._set_vad_state(VadState.DOWNLOADING)
@@ -1048,7 +1048,7 @@ class SheptWindow(Adw.ApplicationWindow):
         # from the failed/missing state wins on the next launch and the switch
         # silently reverts even though the asset is installed.
         self._save_settings()
-        self.status.set_text("Silero VAD downloaded — silence will be skipped.")
+        self.status.set_text("Silero VAD downloaded. Silence will be skipped.")
         return False
 
     def _on_run(self, _btn: Gtk.Button) -> None:
@@ -1159,7 +1159,7 @@ class SheptWindow(Adw.ApplicationWindow):
         # Diagnostics go to a file inside the job's temporary directory, never
         # to an unread pipe: a damaged file makes ffmpeg log hundreds of
         # kilobytes, the 64 KiB pipe buffer fills, and the child then blocks in
-        # write() while this thread waits for stdout to end — a deadlock that
+        # write() while this thread waits for stdout to end: a deadlock that
         # never reaches wait(). The file is removed with the directory.
         stderr_path = wav_path.with_name("ffmpeg-stderr.log")
         with stderr_path.open("wb") as stderr_file:
@@ -1251,7 +1251,7 @@ class SheptWindow(Adw.ApplicationWindow):
     def _handle_line(self, job: Job, line: str, duration: float) -> bool:
         """Handle one whisper-cli line; True when it was a transcript segment.
 
-        Everything that is not a segment — banners, model loading, errors — is
+        Everything that is not a segment (banners, model loading, errors) is
         the caller's business: it feeds the diagnostic tail, which is the only
         clue left when whisper-cli exits non-zero.
         """
@@ -1292,7 +1292,7 @@ class SheptWindow(Adw.ApplicationWindow):
         cancelled: bool,
         details: str | None = None,
     ) -> bool:
-        """Record one job's outcome, then start the next one — failures included."""
+        """Record one job's outcome, then start the next one, failures included."""
         self._proc = None
         self._worker = None
         if self._closing:
@@ -1467,7 +1467,7 @@ def state_text(job: Job) -> str:
         return f"Transcribing… {int(job.progress * 100)}%"
     if job.state is JobState.DONE:
         count = len(job.segments)
-        return f"Done — {count} {'segment' if count == 1 else 'segments'}"
+        return f"Done: {count} {'segment' if count == 1 else 'segments'}"
     if job.state is JobState.FAILED:
         return f"Failed: {summarize_error(job.error or 'unknown error')}"
     return "Cancelled"
@@ -1948,16 +1948,16 @@ class LanguagePicker(Adw.Window):
 
         if self.search_entry.get_text().strip():
             noun = "match" if len(results) == 1 else "matches"
-            self.hint.set_text(f"{len(results)} {noun} — Enter picks the first")
+            self.hint.set_text(f"{len(results)} {noun}. Enter picks the first")
         else:
             self.hint.set_text(
-                f"{len(results)} languages — type to filter, Enter picks the first"
+                f"{len(results)} languages: type to filter, Enter picks the first"
             )
 
     def _make_row(self, language: Language) -> Adw.ActionRow:
         row = Adw.ActionRow(title=language.name)
         if language.code == AUTO.code:
-            row.set_subtitle("Auto-detect — whisper guesses the language")
+            row.set_subtitle("Auto-detect: whisper guesses the language")
         else:
             row.set_subtitle(language.code)
 
@@ -2089,7 +2089,7 @@ class SheptApp(Adw.Application):
         if not paths:
             return
 
-        # The first file is added and selected — the single-file flow — and the
+        # The first file is added and selected (the single-file flow), and the
         # rest simply extend the queue.
         win.set_input_file(paths[0])
         if len(paths) > 1:

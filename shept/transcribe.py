@@ -125,7 +125,7 @@ def build_whisper_cmd(
     """Build the whisper-cli argv for transcribing `wav_path`.
 
     Passing `vad_model` turns on whisper.cpp's Silero VAD stage, which drops
-    silent stretches before they reach the model — that is what stops whisper
+    silent stretches before they reach the model, which is what stops whisper
     from inventing "thank you for watching" over trailing silence.
     """
     cmd = [

@@ -1,4 +1,4 @@
-"""Tests for shept.models — catalogue, downloader and installed detection.
+"""Tests for shept.models: catalogue, downloader and installed detection.
 
 These must run without network access and without PyGObject: `urlopen` is
 replaced by a fake that serves a small payload in chunks.
@@ -709,14 +709,14 @@ def test_vad_state_text_missing_uses_the_given_size():
 def test_vad_state_text_downloading_percentage():
     assert vad_state_text(VadState.DOWNLOADING, "42%") == (
         "Silero VAD is not installed",
-        "Downloading Silero VAD — 42%",
+        "Downloading Silero VAD: 42%",
         "Downloading…",
     )
 
 
 def test_vad_state_text_downloading_bytes_without_a_content_length():
     assert vad_state_text(VadState.DOWNLOADING, "512 kB")[1] == (
-        "Downloading Silero VAD — 512 kB"
+        "Downloading Silero VAD: 512 kB"
     )
 
 
@@ -729,7 +729,7 @@ def test_vad_state_text_downloading_before_the_first_tick():
 def test_vad_state_text_failed():
     assert vad_state_text(VadState.FAILED, NO_NETWORK_REASON) == (
         "Silero VAD is not installed",
-        "Download failed — no network connection.",
+        "Download failed: no network connection.",
         "Retry",
     )
 

@@ -21,7 +21,7 @@
     <p>
       Everything happens locally. There are no accounts, no uploads and no
       network access during transcription, and no daemon running in the
-      background — whisper.cpp is started on demand and exits when the file is
+      background: whisper.cpp is started on demand and exits when the file is
       done.
     </p>
     <ul>

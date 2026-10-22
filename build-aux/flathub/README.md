@@ -1,7 +1,7 @@
 # Flathub submission
 
-The two files in this directory are the ones that go upstream —
-`io.github.psampir.Shept.yml` and `flathub.json` — plus this note. Everything
+The two files in this directory are the ones that go upstream
+(`io.github.psampir.Shept.yml` and `flathub.json`) plus this note. Everything
 here is a copy of `build-aux/io.github.psampir.Shept.yml` with the `shept`
 module pointed at the release tarball instead of the local checkout; the
 differences are marked `FLATHUB:` in the manifest.
@@ -14,7 +14,7 @@ differences are marked `FLATHUB:` in the manifest.
 
 2. **Tag the release and push the tag.** The manifest asks for
    `https://github.com/psampir/shept/archive/refs/tags/v0.1.0.tar.gz`, so the
-   tag `v0.1.0` has to exist on the commit being submitted — the same version
+   tag `v0.1.0` has to exist on the commit being submitted: the same version
    that `pyproject.toml`, `shept/__init__.py` and the `<release>` entry in
    `data/io.github.psampir.Shept.metainfo.xml` already carry.
 
@@ -28,7 +28,7 @@ differences are marked `FLATHUB:` in the manifest.
    ```
 
    Paste the first field over the placeholder. If the tag is ever re-created,
-   the tarball changes and the checksum has to be updated with it — the same
+   the tarball changes and the checksum has to be updated with it; the same
    goes for every later release, which also needs a new `<release>` entry in
    `data/io.github.psampir.Shept.metainfo.xml`.
 
@@ -68,7 +68,7 @@ and step 2 above are done.
 
 ## flathub.json
 
-`flathub.json` is strict JSON — it takes no comments — so the policy behind it
+`flathub.json` is strict JSON (it takes no comments), so the policy behind it
 is written down here instead:
 
 - `only-arches` is `["x86_64"]`: that is the only architecture the bundled
