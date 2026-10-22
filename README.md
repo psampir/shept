@@ -22,14 +22,16 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
 - Pick any audio or video file (mp3, wav, m4a, ogg, opus, flac, aac, mp4,
   mkv, mov, webm, avi, …)
 - Transcribe locally with a Whisper model of your choice
+- Download models from inside the app, with progress and cancellation
 - Streams output as it transcribes, with a progress bar
 - Copy the transcript, or save it with timestamps as `.txt`, `.srt`, `.vtt`,
   `.lrc` or `.json`
 
 Everything runs on your machine: no accounts, no uploads, no network access
-during transcription. No daemons or background processes either — `whisper-cli`
-is launched on demand and exits when done, and the model is loaded into memory
-only for the duration of a run.
+during transcription. The only network access is a model download you start
+yourself; no daemons or background processes either — `whisper-cli` is launched
+on demand and exits when done, and the model is loaded into memory only for the
+duration of a run.
 
 Only file transcription is supported — there is no microphone / live mode.
 
@@ -133,24 +135,46 @@ into any of the directories Shept searches, in this order:
 Every `ggml-*.bin` file found in those directories shows up in the model
 dropdown; if the same model exists in several places, the first directory wins.
 
-Recommended: **`large-v3-turbo`** (~1.5 GB, f16) — the best accuracy/speed
+### Downloading from the app
+
+Open **Manage…** next to the model row to see the models Shept can fetch. Each
+entry shows its size and what it is good for; press **Download** to fetch it.
+Progress is shown per model, a download can be cancelled at any time, and
+closing the window cancels the active transfer. A finished model appears in the
+model dropdown immediately and is selected — no restart needed.
+
+Downloads always go to `$XDG_DATA_HOME/shept/models`, which is
+`~/.local/share/shept/models` by default. That is the first directory Shept
+searches and the only model directory that is writable inside the Flatpak
+sandbox, so a model downloaded there is visible to both the Flatpak and a
+source checkout. A transfer is written as `ggml-<model>.bin.part` and only
+renamed once it is complete, so an interrupted download never shows up in the
+dropdown; the partial file is deleted on failure or cancellation. There is no
+checksum to verify against — HuggingFace does not publish per-file hashes — so
+Shept only checks the downloaded size against the published one.
+
+Recommended: **`large-v3-turbo`** (~1.62 GB, f16) — the best accuracy/speed
 balance for most languages, including non-English ones.
 
+To download by hand instead:
+
 ```bash
-mkdir -p ~/.local/share/whisper-cpp/models
-cd ~/.local/share/whisper-cpp/models
+mkdir -p ~/.local/share/shept/models
+cd ~/.local/share/shept/models
 curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
 ```
 
-Alternative sizes:
+Available models:
 
 | Model                 | File size | Quality     | Speed       |
 | --------------------- | --------- | ----------- | ----------- |
-| `large-v3-turbo`      | 1.5 GB    | excellent   | very fast   |
-| `large-v3-turbo-q5_0` | 0.7 GB    | excellent   | very fast   |
-| `large-v3`            | 3.0 GB    | best        | slower      |
-| `medium`              | 1.5 GB    | good        | medium      |
-| `small`               | 0.5 GB    | acceptable  | fast        |
+| `large-v3-turbo`      | 1.62 GB   | excellent   | very fast   |
+| `large-v3-turbo-q5_0` | 0.57 GB   | excellent   | very fast   |
+| `small`               | 0.49 GB   | acceptable  | fast        |
+| `medium`              | 1.53 GB   | good        | medium      |
+| `large-v3`            | 3.09 GB   | best        | slower      |
+| `base`                | 0.15 GB   | poor        | very fast   |
+| `tiny`                | 0.08 GB   | poorest     | very fast   |
 
 Substitute `ggml-<model>.bin` in the URL above for any of these. Avoid the
 `.en` variants unless you only ever transcribe English — they are
@@ -174,7 +198,8 @@ Once installed (`pip install .`), the same thing is available as the `shept`
 command.
 
 1. **Choose…** an audio or video file
-2. Pick a **Model** (`large-v3-turbo` is selected automatically if present)
+2. Pick a **Model** (`large-v3-turbo` is selected automatically if present).
+   Press **Manage…** to download one if the list is empty or you want another.
 3. Pick the source **Language** (defaults to your system locale when Shept
    supports it, otherwise auto-detect)
 4. Optionally toggle **Translate to English** to get an English translation
@@ -251,8 +276,9 @@ package manager; the same banner explains how.
 
 **Model dropdown shows "(no models found)"** — no `ggml-*.bin` file was found in
 any of the directories listed under [Models](#models); the window lists the
-paths it searched. Filenames must start with `ggml-` and end with `.bin`. Set
-`SHEPT_MODEL_DIR` if your models live elsewhere.
+paths it searched. Press **Manage…** to download one from inside the app, or
+drop a file there by hand. Filenames must start with `ggml-` and end with
+`.bin`. Set `SHEPT_MODEL_DIR` if your models live elsewhere.
 
 **No GPU acceleration / very slow** — see *Checking GPU acceleration* above.
 On Debian/Ubuntu, double-check that you built with `-DGGML_VULKAN=1` and that

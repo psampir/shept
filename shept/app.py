@@ -35,6 +35,15 @@ from shept.environment import (  # noqa: E402
     model_display_name,
     model_search_paths,
 )
+from shept.models import (  # noqa: E402
+    CATALOG,
+    DownloadCancelled,
+    ModelSpec,
+    download,
+    download_dir,
+    human_size,
+    is_downloaded,
+)
 from shept.transcribe import (  # noqa: E402
     EXPORT_LABELS,
     EXPORTERS,
@@ -125,24 +134,24 @@ class SheptWindow(Adw.ApplicationWindow):
         self.file_row.set_activatable_widget(choose_btn)
         group.add(self.file_row)
 
-        models = discover_models()
+        self._models: list[Path] = []
         self.model_row = Adw.ComboRow(title="Model")
-        model_strings = Gtk.StringList()
-        if models:
-            for m in models:
-                model_strings.append(model_display_name(m))
-        else:
-            model_strings.append("(no models found)")
-        self.model_row.set_model(model_strings)
-        self._models = models
-        for i, m in enumerate(models):
-            if model_display_name(m) == "large-v3-turbo":
-                self.model_row.set_selected(i)
-                break
         group.add(self.model_row)
 
-        if not models:
-            controls.append(self._models_hint())
+        self.models_row = Adw.ActionRow(
+            title="Whisper models",
+            subtitle="Download a model without leaving the app",
+        )
+        manage_btn = Gtk.Button(label="Manage…")
+        manage_btn.set_valign(Gtk.Align.CENTER)
+        manage_btn.connect("clicked", self._on_manage_models)
+        self.models_row.add_suffix(manage_btn)
+        self.models_row.set_activatable_widget(manage_btn)
+        group.add(self.models_row)
+        self._model_dialog: ModelDownloadDialog | None = None
+
+        self._hint_box = self._models_hint()
+        controls.append(self._hint_box)
 
         self.lang_row = Adw.ComboRow(title="Language")
         lang_strings = Gtk.StringList()
@@ -200,6 +209,8 @@ class SheptWindow(Adw.ApplicationWindow):
         self.status.set_text(status_text)
         outer.append(self.status)
 
+        self._reload_models()
+
     def _models_hint(self) -> Gtk.Widget:
         """Explain where models were searched and how to get one."""
         searched = "\n".join(f"  {path}" for path in model_search_paths())
@@ -208,7 +219,8 @@ class SheptWindow(Adw.ApplicationWindow):
             label=(
                 "No Whisper model found. Searched:\n"
                 f"{searched}\n"
-                "Recommended: large-v3-turbo (~1.6 GB)."
+                'Use "Manage…" above to download one, or drop a ggml-*.bin '
+                "file into one of those directories."
             ),
             xalign=0,
         )
@@ -219,6 +231,60 @@ class SheptWindow(Adw.ApplicationWindow):
         link.set_halign(Gtk.Align.START)
         box.append(link)
         return box
+
+    def model_available(self, name: str) -> bool:
+        """True when a model called `name` is already in the dropdown."""
+        return any(model_display_name(model) == name for model in self._models)
+
+    def _reload_models(self, select: str | None = None) -> None:
+        """Re-read the model search paths and rebuild the dropdown.
+
+        Runs after a download so a freshly fetched model appears immediately,
+        without restarting the app.
+        """
+        if select is None:
+            current = self.model_row.get_selected()
+            if 0 <= current < len(self._models):
+                select = model_display_name(self._models[current])
+        if select is None:
+            select = "large-v3-turbo"
+
+        self._models = discover_models()
+        strings = Gtk.StringList()
+        if self._models:
+            for model in self._models:
+                strings.append(model_display_name(model))
+        else:
+            strings.append("(no models found)")
+        self.model_row.set_model(strings)
+
+        if self._models:
+            index = 0
+            for i, model in enumerate(self._models):
+                if model_display_name(model) == select:
+                    index = i
+                    break
+            self.model_row.set_selected(index)
+
+        self._hint_box.set_visible(not self._models)
+        self._update_run_state()
+
+    def _on_manage_models(self, _btn: Gtk.Button) -> None:
+        if self._model_dialog is not None:
+            self._model_dialog.present()
+            return
+        self._model_dialog = ModelDownloadDialog(self)
+        self._model_dialog.connect("close-request", self._on_model_dialog_closed)
+        self._model_dialog.present()
+
+    def _on_model_dialog_closed(self, *args) -> bool:
+        self._model_dialog = None
+        return False
+
+    def on_model_downloaded(self, path: Path) -> None:
+        name = model_display_name(path)
+        self._reload_models(select=name)
+        self.status.set_text(f"Downloaded model {name}.")
 
     def _transcribe_blocker(self) -> str:
         """Return why Transcribe is unavailable, or "" when it is available."""
@@ -481,6 +547,228 @@ class SheptWindow(Adw.ApplicationWindow):
             encoding="utf-8",
         )
         self.status.set_text(f"Saved: {f.get_path()}")
+
+
+class ModelDownloadDialog(Adw.Window):
+    """Download models from HuggingFace into the user's data directory.
+
+    Downloads run on a worker thread; every widget update is bounced back to
+    the main loop with `GLib.idle_add`, because GTK is not thread-safe.
+    """
+
+    def __init__(self, parent: SheptWindow) -> None:
+        super().__init__(transient_for=parent, modal=True, title="Whisper models")
+        self.set_default_size(560, 640)
+
+        self._parent = parent
+        self._dest = download_dir()
+        self._cancel = threading.Event()
+        self._active: ModelSpec | None = None
+        self._thread: threading.Thread | None = None
+        self._closed = False
+        #: spec name -> its row, progress bar and the suffix widget currently
+        #: in use (a download/cancel button or the "installed" check mark).
+        self._entries: dict[str, dict[str, Gtk.Widget | None]] = {}
+        self.connect("close-request", self._on_close_request)
+
+        toolbar = Adw.ToolbarView()
+        self.set_content(toolbar)
+        toolbar.add_top_bar(Adw.HeaderBar())
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        toolbar.set_content(box)
+
+        self._message = Gtk.Label(xalign=0)
+        self._message.set_wrap(True)
+        self._message.set_visible(False)
+        box.append(self._message)
+
+        scroller = Gtk.ScrolledWindow(vexpand=True)
+        box.append(scroller)
+        clamp = Adw.Clamp(maximum_size=760)
+        scroller.set_child(clamp)
+
+        self._group = Adw.PreferencesGroup(
+            title="Available models",
+            description=f"Downloads are saved to {self._dest}",
+        )
+        clamp.set_child(self._group)
+
+        for spec in CATALOG:
+            self._add_entry(spec)
+
+    # ---------------------------------------------------------------- widgets
+
+    def _add_entry(self, spec: ModelSpec) -> None:
+        row = Adw.ActionRow(
+            title=spec.name,
+            subtitle=f"{human_size(spec.size_bytes)} · {spec.note}",
+        )
+        progress = Gtk.ProgressBar()
+        progress.set_show_text(True)
+        progress.set_visible(False)
+        progress.set_size_request(160, -1)
+        progress.set_valign(Gtk.Align.CENTER)
+        row.add_suffix(progress)
+        self._group.add(row)
+
+        self._entries[spec.name] = {
+            "row": row,
+            "progress": progress,
+            "action": None,
+        }
+        self._refresh_entry(spec)
+
+    def _refresh_entry(self, spec: ModelSpec) -> None:
+        entry = self._entries[spec.name]
+        row = entry["row"]
+        action = entry["action"]
+        assert isinstance(row, Adw.ActionRow)
+        if action is not None:
+            row.remove(action)
+        entry["action"] = None
+
+        progress = entry["progress"]
+        assert isinstance(progress, Gtk.ProgressBar)
+        progress.set_visible(self._active is spec)
+
+        if self._active is spec:
+            cancel_btn = Gtk.Button(label="Cancel")
+            cancel_btn.add_css_class("destructive-action")
+            cancel_btn.set_valign(Gtk.Align.CENTER)
+            cancel_btn.connect("clicked", self._on_cancel_clicked)
+            row.add_suffix(cancel_btn)
+            entry["action"] = cancel_btn
+            return
+
+        if is_downloaded(spec, self._dest) or self._parent.model_available(spec.name):
+            installed = Gtk.Box(spacing=6)
+            check = Gtk.Image.new_from_icon_name("object-select-symbolic")
+            installed.append(check)
+            installed.append(Gtk.Label(label="Installed"))
+            installed.set_tooltip_text("This model is already available")
+            row.add_suffix(installed)
+            entry["action"] = installed
+            return
+
+        download_btn = Gtk.Button(label="Download")
+        download_btn.set_valign(Gtk.Align.CENTER)
+        download_btn.set_sensitive(self._active is None)
+        download_btn.connect("clicked", lambda _btn, s=spec: self._start_download(s))
+        row.add_suffix(download_btn)
+        entry["action"] = download_btn
+
+    def _refresh_entries(self) -> None:
+        for spec in CATALOG:
+            self._refresh_entry(spec)
+
+    def _set_message(self, text: str, error: bool = True) -> None:
+        self._message.set_text(text)
+        self._message.set_visible(bool(text))
+        for css_class in ("error", "dim-label"):
+            if css_class == ("error" if error else "dim-label"):
+                self._message.add_css_class(css_class)
+            else:
+                self._message.remove_css_class(css_class)
+
+    # ---------------------------------------------------------------- download
+
+    def _start_download(self, spec: ModelSpec) -> None:
+        if self._active is not None:
+            return
+        self._cancel.clear()
+        self._active = spec
+        self._set_message("")
+        self._refresh_entries()
+        self._thread = threading.Thread(
+            target=self._download_worker,
+            args=(spec,),
+            name=f"shept-download-{spec.name}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _download_worker(self, spec: ModelSpec) -> None:
+        try:
+            path = download(
+                spec,
+                self._dest,
+                progress=self._report_progress,
+                is_cancelled=self._cancel.is_set,
+            )
+        except DownloadCancelled as exc:
+            GLib.idle_add(self._download_finished, spec, None, str(exc), False)
+        except Exception as exc:  # surfaced in the dialog, never crashes
+            GLib.idle_add(self._download_finished, spec, None, str(exc), True)
+        else:
+            GLib.idle_add(self._download_finished, spec, path, "", False)
+
+    def _report_progress(self, received: int, total: int) -> None:
+        spec = self._active
+        if spec is None or self._closed:
+            return
+        GLib.idle_add(self._update_progress, spec.name, received, total)
+
+    def _update_progress(self, name: str, received: int, total: int) -> bool:
+        if self._closed or self._active is None or self._active.name != name:
+            return False
+        progress = self._entries[name]["progress"]
+        assert isinstance(progress, Gtk.ProgressBar)
+        if total > 0:
+            fraction = min(1.0, received / total)
+            progress.set_fraction(fraction)
+            progress.set_text(
+                f"{human_size(received)} of {human_size(total)} "
+                f"({int(fraction * 100)}%)"
+            )
+        else:
+            progress.pulse()
+            progress.set_text(human_size(received))
+        return False
+
+    def _download_finished(
+        self,
+        spec: ModelSpec,
+        path: Path | None,
+        message: str,
+        failed: bool,
+    ) -> bool:
+        if self._closed:
+            return False
+        self._active = None
+        self._thread = None
+        if path is not None:
+            self._set_message(f"{spec.name} downloaded.", error=False)
+            self._parent.on_model_downloaded(path)
+        elif message:
+            self._set_message(message, error=failed)
+            if failed:
+                self._parent.status.set_text(f"Model download failed: {message}")
+            else:
+                self._parent.status.set_text("Model download cancelled.")
+        self._refresh_entries()
+        return False
+
+    def _on_cancel_clicked(self, _btn: Gtk.Button) -> None:
+        if self._active is None:
+            return
+        self._cancel.set()
+        self._set_message("Cancelling…", error=False)
+        progress = self._entries[self._active.name]["progress"]
+        assert isinstance(progress, Gtk.ProgressBar)
+        progress.set_text("Cancelling…")
+
+    def _on_close_request(self, *_args) -> bool:
+        self._closed = True
+        self._cancel.set()
+        if self._active is not None:
+            self._parent.status.set_text("Model download cancelled.")
+            self._active = None
+        return False
 
 
 class SheptApp(Adw.Application):
