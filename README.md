@@ -1,3 +1,5 @@
+<p align="center"><img src="data/logo.svg" width="112" alt="Shept logo"></p>
+
 # Shept
 
 *Shept* is Polish for "whisper", spelled the way it sounds.
@@ -388,9 +390,11 @@ another language, export the transcript as subtitles (`.srt`) and translate
 that file with the tool of your choice — DeepL, for instance, accepts `.srt`
 and keeps the timestamps intact.
 
-### Desktop launcher (optional)
+### Desktop launcher (source checkout only)
 
-To get Shept into your application menu, drop a desktop entry at
+The Flatpak bundle and the wheel both install the launcher and the icon
+themselves, so there is nothing to do. Only running from a source checkout
+leaves you without a menu entry; drop one at
 `~/.local/share/applications/io.github.psampir.Shept.desktop`:
 
 ```ini
@@ -399,8 +403,9 @@ Type=Application
 Name=Shept
 GenericName=Audio Transcription
 Comment=Local audio transcription with whisper.cpp
-Exec=shept %U
-Icon=io.github.psampir.Shept
+Exec=python3 -m shept %U
+Path=/path/to/shept
+Icon=/path/to/shept/data/icons/hicolor/scalable/apps/io.github.psampir.Shept.svg
 Terminal=false
 Categories=AudioVideo;Utility;
 Keywords=transcribe;transcription;whisper;speech;audio;text;
@@ -408,10 +413,6 @@ StartupNotify=true
 StartupWMClass=io.github.psampir.Shept
 MimeType=audio/mpeg;audio/x-wav;audio/mp4;audio/ogg;audio/opus;audio/flac;audio/x-flac;audio/aac;video/mp4;video/webm;video/x-matroska;video/quicktime;video/x-msvideo;video/x-ms-wmv;video/mp2t;video/x-m4v;video/3gpp;
 ```
-
-`Exec=shept %U` assumes the package is installed; when running from a source
-checkout without installing, use `Exec=python3 -m shept %U` instead (and set
-`Path=` to the checkout directory).
 
 Then refresh the launcher cache (most desktops do this automatically):
 

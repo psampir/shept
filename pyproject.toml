@@ -46,6 +46,16 @@ shept = "shept.app:main"
 [tool.setuptools.packages.find]
 include = ["shept*"]
 
+# Installed next to the package so `pip install --user` also creates the
+# launcher and the icon: without them a wheel install is only reachable from a
+# terminal. Relative paths land under the install prefix (for --user that is
+# ~/.local).
+[tool.setuptools.data-files]
+"share/applications" = ["data/io.github.psampir.Shept.desktop"]
+"share/icons/hicolor/scalable/apps" = [
+    "data/icons/hicolor/scalable/apps/io.github.psampir.Shept.svg",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
