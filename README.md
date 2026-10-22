@@ -43,7 +43,7 @@ transcription considerably faster than a CPU-only build on most modern GPUs
 
 ## Install
 
-Skryba itself is a single Python file; the only real work is getting
+Skryba itself is one small Python package; the only real work is getting
 `whisper-cli` onto your PATH.
 
 ### Fedora
@@ -164,10 +164,10 @@ whisper-cpp-download-model large-v3-turbo ~/.local/share/whisper-cpp/models
 Run from a source checkout:
 
 ```bash
-python3 skryba.py
+python3 -m skryba
 ```
 
-Once the project is packaged, the same thing is available as the `skryba`
+Once installed (`pip install .`), the same thing is available as the `skryba`
 command.
 
 1. **Choose…** an audio or video file
@@ -183,8 +183,7 @@ command.
 ### Desktop launcher (optional)
 
 To get Skryba into your application menu, drop a desktop entry at
-`~/.local/share/applications/io.github.psampir.Skryba.desktop` and adjust
-`Exec=` to the path of your checkout:
+`~/.local/share/applications/io.github.psampir.Skryba.desktop`:
 
 ```ini
 [Desktop Entry]
@@ -192,7 +191,7 @@ Type=Application
 Name=Skryba
 GenericName=Audio Transcription
 Comment=Local audio transcription with whisper.cpp
-Exec=python3 /path/to/skryba.py
+Exec=skryba
 Icon=audio-input-microphone
 Terminal=false
 Categories=AudioVideo;Utility;
@@ -200,6 +199,10 @@ Keywords=transcribe;transcription;whisper;speech;audio;text;
 StartupNotify=true
 StartupWMClass=io.github.psampir.Skryba
 ```
+
+`Exec=skryba` assumes the package is installed; when running from a source
+checkout without installing, use `Exec=python3 -m skryba` instead (and set
+`Path=` to the checkout directory).
 
 Then refresh the launcher cache (most desktops do this automatically):
 

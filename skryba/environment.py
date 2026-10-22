@@ -1,0 +1,216 @@
+"""Environment discovery: models, external tools, distro, locale and backend.
+
+Everything here is GTK-free so it can be imported and tested on a machine
+without PyGObject installed.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+MODEL_GLOB = "ggml-*.bin"
+MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
+README_URL = "https://github.com/psampir/skryba#install"
+
+REQUIRED_TOOLS = ("whisper-cli", "ffmpeg")
+
+_DISTRO_HINTS: dict[str, dict[str, str]] = {
+    "fedora": {
+        "whisper-cli": (
+            "sudo dnf install -y whisper-cpp ffmpeg python3-gobject gtk4 "
+            "libadwaita  (whisper-cpp: sudo dnf copr enable -y "
+            "sneed/whisper-cpp-vulkan)"
+        ),
+        "ffmpeg": "sudo dnf install -y ffmpeg",
+    },
+    "arch": {
+        "whisper-cli": (
+            "sudo pacman -S whisper-cpp ffmpeg python-gobject gtk4 libadwaita"
+        ),
+        "ffmpeg": "sudo pacman -S ffmpeg",
+    },
+}
+
+LANGUAGES = [
+    ("pl", "Polish"),
+    ("en", "English"),
+    ("de", "German"),
+    ("fr", "French"),
+    ("es", "Spanish"),
+    ("uk", "Ukrainian"),
+    ("ru", "Russian"),
+    ("auto", "Auto-detect"),
+]
+
+# library name fragment -> human readable backend, best GPU backend first
+BACKEND_MARKERS = (
+    ("ggml-vulkan", "Vulkan"),
+    ("ggml-cuda", "CUDA"),
+    ("ggml-hip", "HIP"),
+    ("ggml-metal", "Metal"),
+    ("ggml-sycl", "SYCL"),
+    ("ggml-opencl", "OpenCL"),
+)
+
+
+def _linked_libraries(binary: str) -> list[str]:
+    """Return the ggml libraries `binary` is linked against."""
+    try:
+        ldd = subprocess.run(
+            ["ldd", binary],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+        if ldd.returncode == 0:
+            lines = [ln for ln in ldd.stdout.splitlines() if "ggml" in ln]
+            if lines:
+                return lines
+    except Exception:
+        pass
+    try:
+        ldconfig = subprocess.run(
+            ["ldconfig", "-p"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+        if ldconfig.returncode == 0:
+            return [ln for ln in ldconfig.stdout.splitlines() if "libggml-" in ln]
+    except Exception:
+        pass
+    return []
+
+
+def detect_backend() -> str:
+    """Detect the whisper.cpp backend on this machine.
+
+    Returns one of "Vulkan", "CUDA", "HIP", "Metal", "SYCL", "OpenCL",
+    "CPU" (installed but no GPU backend), "not installed" or "unknown".
+    """
+    try:
+        binary = None
+        for name in ("whisper-cli", "whisper-cpp", "main"):
+            binary = shutil.which(name)
+            if binary is not None:
+                break
+        if binary is None:
+            return "not installed"
+
+        libs = _linked_libraries(binary)
+        for marker, label in BACKEND_MARKERS:
+            if any(marker in lib for lib in libs):
+                return label
+        return "CPU"
+    except Exception:
+        return "unknown"
+
+
+def model_search_paths() -> list[Path]:
+    """Directories searched for models, highest priority first."""
+    data_home = os.environ.get("XDG_DATA_HOME", "")
+    data_dir = Path(data_home) if data_home else Path.home() / ".local" / "share"
+    override = os.environ.get("SKRYBA_MODEL_DIR", "")
+
+    wanted: list[Path] = []
+    if override:
+        wanted.append(Path(override).expanduser())
+    wanted.extend(
+        [
+            data_dir / "skryba" / "models",
+            data_dir / "whisper-cpp" / "models",
+            Path.home() / ".cache" / "whisper.cpp" / "models",
+            Path("/usr/share/whisper-cpp/models"),
+            Path("/usr/local/share/whisper-cpp/models"),
+        ]
+    )
+
+    paths: list[Path] = []
+    for path in wanted:
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
+def model_display_name(path: Path) -> str:
+    """Turn `ggml-large-v3-turbo.bin` into `large-v3-turbo`."""
+    return path.name.removeprefix("ggml-").removesuffix(".bin")
+
+
+def detect_distro(path: Path = Path("/etc/os-release")) -> str:
+    """Classify the distribution as "fedora", "debian", "arch" or "other"."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "other"
+
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        fields[key.strip()] = value.strip().strip("\"'")
+
+    ids = [fields.get("ID", ""), *fields.get("ID_LIKE", "").split()]
+    ids = [ident.lower() for ident in ids if ident]
+    families = {
+        "fedora": ("fedora", "rhel", "centos", "rocky", "almalinux"),
+        "debian": ("debian", "ubuntu"),
+        "arch": ("arch", "archlinux", "manjaro", "endeavouros"),
+    }
+    for family, names in families.items():
+        if any(ident in names for ident in ids):
+            return family
+    return "other"
+
+
+def install_hint(tool: str) -> str:
+    """Return an install hint for `tool` that fits this distribution."""
+    hint = _DISTRO_HINTS.get(detect_distro(), {}).get(tool)
+    if hint is not None:
+        return hint
+    if tool == "whisper-cli":
+        return f"build whisper.cpp from source, see {README_URL}#debian--ubuntu"
+    return f"install {tool} with your package manager, see {README_URL}"
+
+
+def default_language() -> str:
+    """Pick the default transcription language from the system locale."""
+    raw = ""
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            raw = value
+            break
+
+    base = raw.split("_", 1)[0].split(".", 1)[0].split("@", 1)[0].lower()
+    if not base or base in {"c", "posix"}:
+        return "auto"
+
+    code = base[:2]
+    if code in {lang for lang, _label in LANGUAGES}:
+        return code
+    return "auto"
+
+
+def discover_models() -> list[Path]:
+    """Find models in every search path; first match wins on duplicates."""
+    seen: set[str] = set()
+    models: list[Path] = []
+    for directory in model_search_paths():
+        try:
+            candidates = sorted(directory.glob(MODEL_GLOB))
+        except OSError:
+            continue
+        for candidate in candidates:
+            name = model_display_name(candidate)
+            if name in seen:
+                continue
+            seen.add(name)
+            models.append(candidate)
+    return sorted(models, key=model_display_name)

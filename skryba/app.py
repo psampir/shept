@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
-"""Skryba — a GTK4 + libadwaita frontend for whisper-cli."""
+"""Skryba — a GTK4 + libadwaita frontend for whisper-cli.
+
+This is the only module that imports `gi`; the rest of the package is
+GTK-free so it can be tested without PyGObject.
+"""
 
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -15,226 +17,31 @@ from pathlib import Path
 
 import gi
 
+# gi.require_version() must run before the gi.repository import, so the skryba
+# imports below are pushed past the top of the module.
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-
-APP_ID = "io.github.psampir.Skryba"
-MODEL_GLOB = "ggml-*.bin"
-MODELS_URL = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
-README_URL = "https://github.com/psampir/skryba#install"
-
-REQUIRED_TOOLS = ("whisper-cli", "ffmpeg")
-
-_DISTRO_HINTS: dict[str, dict[str, str]] = {
-    "fedora": {
-        "whisper-cli": (
-            "sudo dnf install -y whisper-cpp ffmpeg python3-gobject gtk4 "
-            "libadwaita  (whisper-cpp: sudo dnf copr enable -y "
-            "sneed/whisper-cpp-vulkan)"
-        ),
-        "ffmpeg": "sudo dnf install -y ffmpeg",
-    },
-    "arch": {
-        "whisper-cli": (
-            "sudo pacman -S whisper-cpp ffmpeg python-gobject gtk4 libadwaita"
-        ),
-        "ffmpeg": "sudo pacman -S ffmpeg",
-    },
-}
-
-LANGUAGES = [
-    ("pl", "Polish"),
-    ("en", "English"),
-    ("de", "German"),
-    ("fr", "French"),
-    ("es", "Spanish"),
-    ("uk", "Ukrainian"),
-    ("ru", "Russian"),
-    ("auto", "Auto-detect"),
-]
-
-LINE_RE = re.compile(
-    r"^\[(\d\d:\d\d:\d\d\.\d{3})\s*-->\s*(\d\d:\d\d:\d\d\.\d{3})\]\s+(.*)$"
+from skryba import APP_ID  # noqa: E402
+from skryba.environment import (  # noqa: E402
+    LANGUAGES,
+    MODELS_URL,
+    REQUIRED_TOOLS,
+    default_language,
+    detect_backend,
+    discover_models,
+    install_hint,
+    model_display_name,
+    model_search_paths,
 )
-
-# library name fragment -> human readable backend, best GPU backend first
-BACKEND_MARKERS = (
-    ("ggml-vulkan", "Vulkan"),
-    ("ggml-cuda", "CUDA"),
-    ("ggml-hip", "HIP"),
-    ("ggml-metal", "Metal"),
-    ("ggml-sycl", "SYCL"),
-    ("ggml-opencl", "OpenCL"),
+from skryba.transcribe import (  # noqa: E402
+    build_ffmpeg_cmd,
+    build_whisper_cmd,
+    parse_progress_line,
+    parse_segment,
+    ts_to_seconds,
 )
-
-
-def _linked_libraries(binary: str) -> list[str]:
-    """Return the ggml libraries `binary` is linked against."""
-    try:
-        ldd = subprocess.run(
-            ["ldd", binary],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=5,
-        )
-        if ldd.returncode == 0:
-            lines = [ln for ln in ldd.stdout.splitlines() if "ggml" in ln]
-            if lines:
-                return lines
-    except Exception:
-        pass
-    try:
-        ldconfig = subprocess.run(
-            ["ldconfig", "-p"],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=5,
-        )
-        if ldconfig.returncode == 0:
-            return [
-                ln for ln in ldconfig.stdout.splitlines() if "libggml-" in ln
-            ]
-    except Exception:
-        pass
-    return []
-
-
-def detect_backend() -> str:
-    """Detect the whisper.cpp backend on this machine.
-
-    Returns one of "Vulkan", "CUDA", "HIP", "Metal", "SYCL", "OpenCL",
-    "CPU" (installed but no GPU backend), "not installed" or "unknown".
-    """
-    try:
-        binary = None
-        for name in ("whisper-cli", "whisper-cpp", "main"):
-            binary = shutil.which(name)
-            if binary is not None:
-                break
-        if binary is None:
-            return "not installed"
-
-        libs = _linked_libraries(binary)
-        for marker, label in BACKEND_MARKERS:
-            if any(marker in lib for lib in libs):
-                return label
-        return "CPU"
-    except Exception:
-        return "unknown"
-
-
-def model_search_paths() -> list[Path]:
-    """Directories searched for models, highest priority first."""
-    data_home = os.environ.get("XDG_DATA_HOME", "")
-    data_dir = Path(data_home) if data_home else Path.home() / ".local" / "share"
-    override = os.environ.get("SKRYBA_MODEL_DIR", "")
-
-    wanted: list[Path] = []
-    if override:
-        wanted.append(Path(override).expanduser())
-    wanted.extend(
-        [
-            data_dir / "skryba" / "models",
-            data_dir / "whisper-cpp" / "models",
-            Path.home() / ".cache" / "whisper.cpp" / "models",
-            Path("/usr/share/whisper-cpp/models"),
-            Path("/usr/local/share/whisper-cpp/models"),
-        ]
-    )
-
-    paths: list[Path] = []
-    for path in wanted:
-        if path not in paths:
-            paths.append(path)
-    return paths
-
-
-def model_display_name(path: Path) -> str:
-    """Turn `ggml-large-v3-turbo.bin` into `large-v3-turbo`."""
-    return path.name.removeprefix("ggml-").removesuffix(".bin")
-
-
-def detect_distro() -> str:
-    """Classify the distribution as "fedora", "debian", "arch" or "other"."""
-    try:
-        text = Path("/etc/os-release").read_text(
-            encoding="utf-8", errors="replace"
-        )
-    except OSError:
-        return "other"
-
-    fields: dict[str, str] = {}
-    for line in text.splitlines():
-        if "=" not in line or line.lstrip().startswith("#"):
-            continue
-        key, _, value = line.partition("=")
-        fields[key.strip()] = value.strip().strip("\"'")
-
-    ids = [fields.get("ID", ""), *fields.get("ID_LIKE", "").split()]
-    ids = [ident.lower() for ident in ids if ident]
-    families = {
-        "fedora": ("fedora", "rhel", "centos", "rocky", "almalinux"),
-        "debian": ("debian", "ubuntu"),
-        "arch": ("arch", "archlinux", "manjaro", "endeavouros"),
-    }
-    for family, names in families.items():
-        if any(ident in names for ident in ids):
-            return family
-    return "other"
-
-
-def install_hint(tool: str) -> str:
-    """Return an install hint for `tool` that fits this distribution."""
-    hint = _DISTRO_HINTS.get(detect_distro(), {}).get(tool)
-    if hint is not None:
-        return hint
-    if tool == "whisper-cli":
-        return (
-            "build whisper.cpp from source, see "
-            f"{README_URL}#debian--ubuntu"
-        )
-    return f"install {tool} with your package manager, see {README_URL}"
-
-
-def default_language() -> str:
-    """Pick the default transcription language from the system locale."""
-    raw = ""
-    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
-        value = os.environ.get(var, "").strip()
-        if value:
-            raw = value
-            break
-
-    base = raw.split("_", 1)[0].split(".", 1)[0].split("@", 1)[0].lower()
-    if not base or base in {"c", "posix"}:
-        return "auto"
-
-    code = base[:2]
-    if code in {lang for lang, _label in LANGUAGES}:
-        return code
-    return "auto"
-
-
-def discover_models() -> list[Path]:
-    """Find models in every search path; first match wins on duplicates."""
-    seen: set[str] = set()
-    models: list[Path] = []
-    for directory in model_search_paths():
-        try:
-            candidates = sorted(directory.glob(MODEL_GLOB))
-        except OSError:
-            continue
-        for candidate in candidates:
-            name = model_display_name(candidate)
-            if name in seen:
-                continue
-            seen.add(name)
-            models.append(candidate)
-    return sorted(models, key=model_display_name)
 
 
 class SkrybaWindow(Adw.ApplicationWindow):
@@ -484,31 +291,22 @@ class SkrybaWindow(Adw.ApplicationWindow):
         wav_path = Path(self._tmpdir.name) / "input.wav"
 
         input_duration = self._probe_duration(input_path)
-        ffmpeg_cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-nostats", "-progress", "pipe:1",
-            "-i", str(input_path),
-            "-vn", "-ac", "1", "-ar", "16000",
-            str(wav_path), "-y",
-        ]
+        ffmpeg_cmd = build_ffmpeg_cmd(input_path, wav_path)
         ff = subprocess.Popen(
             ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
         assert ff.stdout is not None
         for line in ff.stdout:
-            line = line.strip()
-            if line.startswith("out_time_ms="):
-                try:
-                    secs = int(line.split("=", 1)[1]) / 1_000_000.0
-                except ValueError:
-                    continue
-                if input_duration > 0:
-                    frac = max(0.0, min(1.0, secs / input_duration))
-                    GLib.idle_add(
-                        self._set_progress, frac,
-                        f"Decoding audio… {int(frac * 100)}%",
-                    )
+            secs = parse_progress_line(line)
+            if secs is None:
+                continue
+            if input_duration > 0:
+                frac = max(0.0, min(1.0, secs / input_duration))
+                GLib.idle_add(
+                    self._set_progress, frac,
+                    f"Decoding audio… {int(frac * 100)}%",
+                )
         if ff.wait() != 0:
             err = (ff.stderr.read() if ff.stderr else "") or "unknown error"
             GLib.idle_add(self._finish, False, f"ffmpeg failed: {err.strip()}")
@@ -518,15 +316,13 @@ class SkrybaWindow(Adw.ApplicationWindow):
         GLib.idle_add(self.status.set_text, "Running whisper-cli…")
 
         duration = self._probe_duration(wav_path)
-        cmd = [
-            "whisper-cli",
-            "-m", str(model),
-            "-l", lang,
-            "-t", str(min(8, os.cpu_count() or 4)),
-            "-f", str(wav_path),
-        ]
-        if translate:
-            cmd.append("--translate")
+        cmd = build_whisper_cmd(
+            model,
+            wav_path,
+            lang,
+            min(8, os.cpu_count() or 4),
+            translate,
+        )
 
         self._proc = subprocess.Popen(
             cmd,
@@ -556,20 +352,15 @@ class SkrybaWindow(Adw.ApplicationWindow):
             return 0.0
 
     def _handle_line(self, line: str, duration: float) -> None:
-        m = LINE_RE.match(line)
-        if not m:
+        segment = parse_segment(line)
+        if segment is None:
             return
-        end_ts, text = m.group(2), m.group(3).strip()
+        end_ts, text = segment
         GLib.idle_add(self._append_text, text + "\n")
         if duration > 0:
-            secs = self._ts_to_seconds(end_ts)
+            secs = ts_to_seconds(end_ts)
             frac = max(0.0, min(1.0, secs / duration))
             GLib.idle_add(self._set_progress, frac, end_ts)
-
-    @staticmethod
-    def _ts_to_seconds(ts: str) -> float:
-        h, m, s = ts.split(":")
-        return int(h) * 3600 + int(m) * 60 + float(s)
 
     def _append_text(self, text: str) -> bool:
         end = self.buffer.get_end_iter()
@@ -634,7 +425,3 @@ def main() -> int:
     # here: a desktop-menu launch has nowhere to show a stderr message.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     return SkrybaApp().run(sys.argv)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

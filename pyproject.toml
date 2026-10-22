@@ -35,7 +35,7 @@ Homepage = "https://github.com/psampir/skryba"
 Issues = "https://github.com/psampir/skryba/issues"
 
 [project.scripts]
-skryba = "skryba:main"
+skryba = "skryba.app:main"
 
-[tool.setuptools]
-py-modules = ["skryba"]
+[tool.setuptools.packages.find]
+include = ["skryba*"]
