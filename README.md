@@ -405,6 +405,26 @@ VAD asset is missing, press **Download** in the hint under the switch. As a
 fallback you can trim silence with ffmpeg (`-af silenceremove`) before adding
 the file.
 
+**The Flatpak ignores my GTK theme** — expected, and not specific to Shept.
+Shept uses libadwaita, which draws itself with Adwaita and deliberately ignores
+`GTK_THEME`; GTK3 had Flatpak theme extensions, GTK4 has no equivalent. On the
+host your theme is applied by `~/.config/gtk-4.0/gtk.css`, which is loaded after
+libadwaita's stylesheet and overrides its colours — but Flatpak gives every app
+its own `$XDG_CONFIG_HOME`, so that file is invisible inside the sandbox.
+
+To apply your theme to this app only, link the theme's `gtk-4.0` directory into
+the sandbox config (adjust the theme name):
+
+```bash
+mkdir -p ~/.var/app/io.github.psampir.Shept/config
+ln -sfn ~/.themes/Catppuccin-Mauve-Dark/gtk-4.0 \
+        ~/.var/app/io.github.psampir.Shept/config/gtk-4.0
+```
+
+The link is read through the `home:ro` mount, so theme updates are picked up
+without repeating this. Uninstalling the app removes the directory. Dark and
+light mode still follow the system setting without any of this.
+
 ## Status
 
 Shept is pre-release software under active development. Development happens on
