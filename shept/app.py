@@ -24,7 +24,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from shept import APP_ID  # noqa: E402
+from shept import APP_ID, settings  # noqa: E402
 from shept.environment import (  # noqa: E402
     LANGUAGES,
     MODELS_URL,
@@ -51,6 +51,7 @@ from shept.models import (  # noqa: E402
     is_downloaded,
 )
 from shept.queue import Job, JobState, Queue, export_all  # noqa: E402
+from shept.settings import Settings  # noqa: E402
 from shept.transcribe import (  # noqa: E402
     EXPORT_LABELS,
     EXPORTERS,
@@ -275,7 +276,6 @@ class SheptWindow(Adw.ApplicationWindow):
             subtitle="Drop silent stretches so whisper cannot invent text over them",
         )
         self.vad_row.set_active(default_skip_silence(self._vad_model))
-        self.vad_row.connect("notify::active", self._on_vad_toggled)
         group.add(self.vad_row)
 
         self.vad_hint = Adw.ActionRow(
@@ -343,6 +343,63 @@ class SheptWindow(Adw.ApplicationWindow):
         content.append(self.status)
 
         self._reload_models()
+        self._restore_settings()
+
+    # ----------------------------------------------------------------- settings
+
+    def _restore_settings(self) -> None:
+        """Apply the saved model, language and silence choice to the widgets.
+
+        A stored model that is no longer installed is not an error: the list
+        simply has no such entry and `_reload_models` keeps its default
+        selection. The signal handlers are connected only at the end, so
+        restoring the widgets never writes a settings file of its own.
+        """
+        path = settings.settings_path()
+        stored = settings.load(path)
+
+        if stored.model is not None:
+            self._reload_models(select=stored.model)
+
+        codes = [code for code, _label in LANGUAGES]
+        if stored.language in codes:
+            self.lang_row.set_selected(codes.index(stored.language))
+
+        # Before the first save there is no file and no user choice yet, so the
+        # switch keeps its default: on when the VAD asset is installed.
+        if path.exists():
+            skip = stored.skip_silence
+        else:
+            skip = default_skip_silence(self._vad_model)
+        self._suppress_vad = True
+        self.vad_row.set_active(vad_model_for(skip, self._vad_model) is not None)
+        self._suppress_vad = False
+
+        self.model_row.connect("notify::selected", self._on_model_changed)
+        self.lang_row.connect("notify::selected", self._on_language_changed)
+        self.vad_row.connect("notify::active", self._on_vad_toggled)
+
+    def _current_settings(self) -> Settings:
+        """The choices the widgets describe right now."""
+        model = self._selected_model()
+        return Settings(
+            model=model_display_name(model) if model is not None else None,
+            language=self._selected_lang(),
+            skip_silence=self.vad_row.get_active() and self._vad_model is not None,
+        )
+
+    def _save_settings(self) -> None:
+        """Persist the current choices; a read-only config dir must not crash."""
+        try:
+            settings.save(self._current_settings())
+        except OSError as exc:
+            self.status.set_text(f"Could not save settings: {exc}")
+
+    def _on_model_changed(self, *_args: object) -> None:
+        self._save_settings()
+
+    def _on_language_changed(self, *_args: object) -> None:
+        self._save_settings()
 
     def _models_hint(self) -> Gtk.Widget:
         """Explain where models were searched and how to get one."""
@@ -650,12 +707,16 @@ class SheptWindow(Adw.ApplicationWindow):
         return True
 
     def _selected_model(self) -> Path | None:
-        if not self._models:
+        index = self.model_row.get_selected()
+        if not 0 <= index < len(self._models):
             return None
-        return self._models[self.model_row.get_selected()]
+        return self._models[index]
 
     def _selected_lang(self) -> str:
-        return LANGUAGES[self.lang_row.get_selected()][0]
+        index = self.lang_row.get_selected()
+        if not 0 <= index < len(LANGUAGES):
+            return "auto"
+        return LANGUAGES[index][0]
 
     # ---------------------------------------------------------------- silence
 
@@ -671,6 +732,8 @@ class SheptWindow(Adw.ApplicationWindow):
             self.status.set_text(
                 "Silero VAD is not installed — press Download to fetch it."
             )
+            return
+        self._save_settings()
 
     def _on_vad_download(self, _btn: Gtk.Button) -> None:
         """Fetch the Silero VAD asset — only when the user asks for it."""
