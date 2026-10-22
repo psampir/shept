@@ -113,8 +113,9 @@ def detect_backend() -> str:
 
 def model_search_paths() -> list[Path]:
     """Directories searched for models, highest priority first."""
+    home = Path.home()
     data_home = os.environ.get("XDG_DATA_HOME", "")
-    data_dir = Path(data_home) if data_home else Path.home() / ".local" / "share"
+    data_dir = Path(data_home) if data_home else home / ".local" / "share"
     override = os.environ.get("SHEPT_MODEL_DIR", "")
 
     wanted: list[Path] = []
@@ -124,7 +125,14 @@ def model_search_paths() -> list[Path]:
         [
             data_dir / "shept" / "models",
             data_dir / "whisper-cpp" / "models",
-            Path.home() / ".cache" / "whisper.cpp" / "models",
+            # Both the XDG data home and the real home are searched. Inside the
+            # Flatpak sandbox XDG_DATA_HOME is app-private (~/.var/app/<app-id>/
+            # data) while $HOME is still the user's home, because the manifest
+            # grants `--filesystem=home:ro`; without this entry the models a
+            # user installed in ~/.local/share would be invisible. The same
+            # applies to any user with a non-default XDG_DATA_HOME.
+            home / ".local" / "share" / "whisper-cpp" / "models",
+            home / ".cache" / "whisper.cpp" / "models",
             Path("/usr/share/whisper-cpp/models"),
             Path("/usr/local/share/whisper-cpp/models"),
         ]

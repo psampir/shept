@@ -86,6 +86,7 @@ def test_model_search_paths_priority_order(fake_home, tmp_path, monkeypatch):
         Path("/opt/models"),
         data / "shept" / "models",
         data / "whisper-cpp" / "models",
+        fake_home / ".local" / "share" / "whisper-cpp" / "models",
         fake_home / ".cache" / "whisper.cpp" / "models",
         Path("/usr/share/whisper-cpp/models"),
         Path("/usr/local/share/whisper-cpp/models"),
@@ -101,6 +102,46 @@ def test_model_search_paths_deduplicates(fake_home, tmp_path, monkeypatch):
 
     assert len(paths) == len(set(paths))
     assert paths.count(data / "shept" / "models") == 1
+
+
+def test_model_search_paths_searches_xdg_and_home(fake_home, monkeypatch):
+    """A non-default XDG_DATA_HOME must not hide the real ~/.local/share."""
+    monkeypatch.setenv("XDG_DATA_HOME", "/tmp/xdg-test")
+
+    paths = environment.model_search_paths()
+
+    assert Path("/tmp/xdg-test/whisper-cpp/models") in paths
+    assert fake_home / ".local" / "share" / "whisper-cpp" / "models" in paths
+
+
+def test_model_search_paths_default_home_appears_once(fake_home):
+    """With no XDG override, the home data dir is reached twice — dedupe it."""
+    paths = environment.model_search_paths()
+
+    shared = fake_home / ".local" / "share" / "whisper-cpp" / "models"
+    assert paths.count(shared) == 1
+    assert len(paths) == len(set(paths))
+
+
+def test_model_search_paths_xdg_equal_to_home_share_has_no_duplicates(
+    fake_home, monkeypatch
+):
+    monkeypatch.setenv("XDG_DATA_HOME", str(fake_home / ".local" / "share"))
+
+    paths = environment.model_search_paths()
+
+    assert len(paths) == len(set(paths))
+    assert paths.count(fake_home / ".local" / "share" / "whisper-cpp" / "models") == 1
+    assert paths.count(fake_home / ".local" / "share" / "shept" / "models") == 1
+
+
+def test_model_search_paths_override_still_first_with_xdg(
+    fake_home, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("SHEPT_MODEL_DIR", "/opt/models")
+
+    assert environment.model_search_paths()[0] == Path("/opt/models")
 
 
 def test_model_display_name_strips_ggml_wrapper():
