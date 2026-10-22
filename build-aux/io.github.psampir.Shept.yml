@@ -1,0 +1,93 @@
+# Flatpak manifest for Shept. Local builds only — not submitted to Flathub yet.
+#
+# FFmpeg is rebuilt here even though org.gnome.Platform already ships the codec
+# libraries: the runtime has no `ffmpeg` / `ffprobe` executables, and Shept
+# shells out to both to decode the input and to probe its duration.
+#
+# Two known risks on a first build:
+#
+#   (a) ggml-vulkan needs `glslc` (shaderc) at configure time. It may or may not
+#       be part of org.gnome.Sdk. If the whisper-cpp cmake step reports Vulkan
+#       as disabled, add a `shaderc` module before whisper-cpp — or drop
+#       -DGGML_VULKAN=ON and ship a CPU-only build, which still works.
+#   (b) The `shept` module uses `type: dir` / `path: ..`, which only works for
+#       builds from a local checkout. The Flathub submission must replace it
+#       with a release tarball source pinned by sha256.
+#
+# whisper.cpp is deliberately built with BUILD_SHARED_LIBS=ON: Shept's
+# detect_backend() runs `ldd whisper-cli` to tell a Vulkan build from a CPU-only
+# one, and a statically linked binary reports no ggml libraries at all.
+
+app-id: io.github.psampir.Shept
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: shept
+
+finish-args:
+  # X11 shared memory (MIT-SHM); without it the X11 path copies every frame.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # Vulkan (and any future CUDA/HIP backend) needs the GPU device nodes.
+  - --device=dri
+  # Models and media live in the user's home. Read-only is enough: saving a
+  # transcript goes through the file-dialog portal, which is not sandboxed.
+  - --filesystem=home:ro
+
+modules:
+  - name: whisper-cpp
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DGGML_VULKAN=ON
+      - -DBUILD_SHARED_LIBS=ON
+      - -DWHISPER_BUILD_TESTS=OFF
+      - -DWHISPER_BUILD_SERVER=OFF
+      # whisper-cli comes from the examples target; it is on by default for a
+      # standalone build, but spelled out so it cannot silently disappear.
+      - -DWHISPER_BUILD_EXAMPLES=ON
+    post-install:
+      # whisper.cpp installs libwhisper and the libggml-* backends, but has no
+      # install rule for the CLI itself (checked at v1.8.4), so copy it over.
+      - install -Dm755 bin/whisper-cli /app/bin/whisper-cli
+    sources:
+      - type: git
+        url: https://github.com/ggml-org/whisper.cpp.git
+        tag: v1.8.4
+        commit: 9386f239401074690479731c1e41683fbbeac557
+
+  - name: ffmpeg
+    buildsystem: autotools
+    config-opts:
+      - --disable-doc
+      - --disable-static
+      - --enable-shared
+      - --disable-debug
+      # No nasm/yasm in the SDK. Decode speed does not matter at this scale.
+      - --disable-x86asm
+      - --prefix=/app
+    cleanup:
+      - /share/ffmpeg/examples
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-8.1.tar.xz
+        sha256: b072aed6871998cce9b36e7774033105ca29e33632be5b6347f3206898e0756a
+
+  - name: shept
+    buildsystem: simple
+    build-commands:
+      # Plain copy instead of `pip install`: the package needs no build step,
+      # has no runtime dependencies, and this keeps __pycache__ out of /app.
+      - install -d /app/share/shept/shept
+      - cp shept/*.py /app/share/shept/shept/
+      - install -Dm644 data/io.github.psampir.Shept.desktop
+        /app/share/applications/io.github.psampir.Shept.desktop
+      - install -Dm644 data/io.github.psampir.Shept.metainfo.xml
+        /app/share/metainfo/io.github.psampir.Shept.metainfo.xml
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.psampir.Shept.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.psampir.Shept.svg
+      - install -Dm755 build-aux/shept.in /app/bin/shept
+    sources:
+      - type: dir
+        path: ..

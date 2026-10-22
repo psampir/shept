@@ -5,3 +5,7 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+build-dir/
+.flatpak-builder/
+repo/
+*.flatpak

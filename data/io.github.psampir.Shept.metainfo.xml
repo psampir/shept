@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.psampir.Shept</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Shept</name>
+  <summary>Transcribe audio and video files locally with whisper.cpp</summary>
+
+  <developer_name>Paweł Sampir</developer_name>
+
+  <description>
+    <p>
+      Shept turns audio and video files into text on your own machine. Pick a
+      recording, choose a Whisper model and press Transcribe: the transcript
+      streams in as it is produced, and can be copied or saved as plain text.
+    </p>
+    <p>
+      Everything happens locally. There are no accounts, no uploads and no
+      network access during transcription, and no daemon running in the
+      background — whisper.cpp is started on demand and exits when the file is
+      done.
+    </p>
+    <ul>
+      <li>Supports the common audio and video containers (mp3, wav, m4a, ogg, opus, flac, aac, mp4, mkv, mov, webm, avi)</li>
+      <li>Streaming output and a progress bar driven by the real timestamps</li>
+      <li>Language selection, or automatic detection</li>
+      <li>Optional translation of the result into English</li>
+      <li>GPU acceleration through Vulkan when whisper.cpp was built with it</li>
+    </ul>
+  </description>
+
+  <!-- Flathub expects at least one <screenshots> entry before submission.
+       Add one (with a caption and an image served over https) when the first
+       release is tagged. -->
+
+  <launchable type="desktop-id">io.github.psampir.Shept.desktop</launchable>
+
+  <url type="homepage">https://github.com/psampir/shept</url>
+  <url type="bugtracker">https://github.com/psampir/shept/issues</url>
+
+  <provides>
+    <binary>shept</binary>
+  </provides>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>transcribe</keyword>
+    <keyword>transcription</keyword>
+    <keyword>whisper</keyword>
+    <keyword>speech</keyword>
+    <keyword>audio</keyword>
+    <keyword>subtitles</keyword>
+  </keywords>
+
+  <!-- The application produces no content of its own: it only displays text
+       derived from a file the user selects. -->
+  <content_rating type="oars-1.1">
+    <content_attribute id="violence-cartoon">none</content_attribute>
+    <content_attribute id="violence-fantasy">none</content_attribute>
+    <content_attribute id="violence-realistic">none</content_attribute>
+    <content_attribute id="violence-bloodshed">none</content_attribute>
+    <content_attribute id="violence-sexual">none</content_attribute>
+    <content_attribute id="drugs-alcohol">none</content_attribute>
+    <content_attribute id="drugs-narcotics">none</content_attribute>
+    <content_attribute id="drugs-tobacco">none</content_attribute>
+    <content_attribute id="sex-nudity">none</content_attribute>
+    <content_attribute id="sex-themes">none</content_attribute>
+    <content_attribute id="sex-homosexuality">none</content_attribute>
+    <content_attribute id="sex-prostitution">none</content_attribute>
+    <content_attribute id="sex-adultery">none</content_attribute>
+    <content_attribute id="sex-appearance">none</content_attribute>
+    <content_attribute id="language-profanity">none</content_attribute>
+    <content_attribute id="language-humor">none</content_attribute>
+    <content_attribute id="language-discrimination">none</content_attribute>
+    <content_attribute id="social-chat">none</content_attribute>
+    <content_attribute id="social-audio">none</content_attribute>
+    <content_attribute id="social-contacts">none</content_attribute>
+    <content_attribute id="social-info">none</content_attribute>
+    <content_attribute id="social-location">none</content_attribute>
+    <content_attribute id="money-purchasing">none</content_attribute>
+    <content_attribute id="money-gambling">none</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="0.1.0" date="2026-10-22">
+      <description>
+        <p>Initial release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

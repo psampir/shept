@@ -1,0 +1,3 @@
+#!/bin/sh
+export PYTHONPATH=/app/share/shept${PYTHONPATH:+:$PYTHONPATH}
+exec python3 -m shept "$@"
