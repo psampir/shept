@@ -36,11 +36,15 @@ from shept.environment import (  # noqa: E402
     model_search_paths,
 )
 from shept.transcribe import (  # noqa: E402
+    EXPORT_LABELS,
+    EXPORTERS,
+    Segment,
     build_ffmpeg_cmd,
     build_whisper_cmd,
+    format_txt,
+    ms_to_ts,
     parse_progress_line,
     parse_segment,
-    ts_to_seconds,
 )
 
 
@@ -52,6 +56,8 @@ class SheptWindow(Adw.ApplicationWindow):
         self._proc: subprocess.Popen[str] | None = None
         self._tmpdir: tempfile.TemporaryDirectory | None = None
         self._input_file: Path | None = None
+        self._segments: list[Segment] = []
+        self._export_format = "txt"
         self._missing_tools = [
             name for name in REQUIRED_TOOLS if shutil.which(name) is None
         ]
@@ -68,11 +74,24 @@ class SheptWindow(Adw.ApplicationWindow):
         self.copy_btn.connect("clicked", self._on_copy)
         header.pack_end(self.copy_btn)
 
-        self.save_btn = Gtk.Button.new_from_icon_name("document-save-symbolic")
-        self.save_btn.set_tooltip_text("Save transcript as .txt")
+        # One menu item per export format. The format is carried in the action
+        # target, so the file dialog never has to guess it from the filename
+        # the user types.
+        self.export_menu = Gio.Menu()
+        for ext, label in EXPORT_LABELS.items():
+            self.export_menu.append(f"{label} (.{ext})", f"win.export::{ext}")
+        self.save_btn = Gtk.MenuButton()
+        self.save_btn.set_icon_name("document-save-symbolic")
+        self.save_btn.set_tooltip_text("Save transcript")
+        self.save_btn.set_menu_model(self.export_menu)
         self.save_btn.set_sensitive(False)
-        self.save_btn.connect("clicked", self._on_save)
         header.pack_end(self.save_btn)
+
+        export_action = Gio.SimpleAction.new("export", GLib.VariantType.new("s"))
+        export_action.connect("activate", self._on_export)
+        export_actions = Gio.SimpleActionGroup()
+        export_actions.add_action(export_action)
+        self.insert_action_group("win", export_actions)
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         outer.set_margin_top(12)
@@ -189,7 +208,7 @@ class SheptWindow(Adw.ApplicationWindow):
             label=(
                 "No Whisper model found. Searched:\n"
                 f"{searched}\n"
-                "Recommended: large-v3-turbo (~1.5 GB)."
+                "Recommended: large-v3-turbo (~1.6 GB)."
             ),
             xalign=0,
         )
@@ -286,6 +305,7 @@ class SheptWindow(Adw.ApplicationWindow):
         self.copy_btn.set_sensitive(False)
         self.save_btn.set_sensitive(False)
         self.buffer.set_text("")
+        self._segments.clear()
         self.progress.set_visible(True)
         self.progress.set_fraction(0.0)
         self.progress.set_text("Decoding audio…")
@@ -391,16 +411,20 @@ class SheptWindow(Adw.ApplicationWindow):
         segment = parse_segment(line)
         if segment is None:
             return
-        end_ts, text = segment
-        GLib.idle_add(self._append_text, text + "\n")
+        GLib.idle_add(self._append_segment, segment)
         if duration > 0:
-            secs = ts_to_seconds(end_ts)
-            frac = max(0.0, min(1.0, secs / duration))
-            GLib.idle_add(self._set_progress, frac, end_ts)
+            frac = max(0.0, min(1.0, (segment.end_ms / 1000.0) / duration))
+            GLib.idle_add(
+                self._set_progress,
+                frac,
+                ms_to_ts(segment.end_ms),
+            )
 
-    def _append_text(self, text: str) -> bool:
+    def _append_segment(self, segment: Segment) -> bool:
+        """Show one segment and keep it for the exporters."""
+        self._segments.append(segment)
         end = self.buffer.get_end_iter()
-        self.buffer.insert(end, text)
+        self.buffer.insert(end, segment.text + "\n")
         return False
 
     def _set_progress(self, frac: float, label: str) -> bool:
@@ -413,7 +437,7 @@ class SheptWindow(Adw.ApplicationWindow):
         self._update_run_state()
         has_text = self.buffer.get_char_count() > 0
         self.copy_btn.set_sensitive(has_text)
-        self.save_btn.set_sensitive(has_text)
+        self.save_btn.set_sensitive(bool(self._segments))
         self.status.set_text(msg)
         if self._tmpdir is not None:
             self._tmpdir.cleanup()
@@ -430,11 +454,19 @@ class SheptWindow(Adw.ApplicationWindow):
         clipboard.set(self._transcript_text())
         self.status.set_text("Copied to clipboard.")
 
-    def _on_save(self, _btn: Gtk.Button) -> None:
-        dialog = Gtk.FileDialog(title="Save transcript")
-        suggested = "transcript.txt"
+    def _on_export(
+        self,
+        _action: Gio.SimpleAction,
+        param: GLib.Variant | None,
+    ) -> None:
+        ext = param.get_string() if param is not None else "txt"
+        if ext not in EXPORTERS:
+            return
+        self._export_format = ext
+        dialog = Gtk.FileDialog(title=f"Save transcript as .{ext}")
+        suggested = f"transcript.{ext}"
         if self._input_file is not None:
-            suggested = self._input_file.with_suffix(".txt").name
+            suggested = self._input_file.with_suffix(f".{ext}").name
         dialog.set_initial_name(suggested)
         dialog.save(self, None, self._on_save_chosen)
 
@@ -443,7 +475,11 @@ class SheptWindow(Adw.ApplicationWindow):
             f = dialog.save_finish(result)
         except GLib.Error:
             return
-        Path(f.get_path()).write_text(self._transcript_text(), encoding="utf-8")
+        formatter = EXPORTERS.get(self._export_format, format_txt)
+        Path(f.get_path()).write_text(
+            formatter(self._segments),
+            encoding="utf-8",
+        )
         self.status.set_text(f"Saved: {f.get_path()}")
 
 

@@ -23,7 +23,8 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
   mkv, mov, webm, avi, …)
 - Transcribe locally with a Whisper model of your choice
 - Streams output as it transcribes, with a progress bar
-- Copy or save the transcript
+- Copy the transcript, or save it with timestamps as `.txt`, `.srt`, `.vtt`,
+  `.lrc` or `.json`
 
 Everything runs on your machine: no accounts, no uploads, no network access
 during transcription. No daemons or background processes either — `whisper-cli`
@@ -180,7 +181,11 @@ command.
    instead of a transcript in the source language
 5. Click **Transcribe**. The progress bar first tracks ffmpeg decoding, then
    the text segments stream in as whisper-cli produces them
-6. Use the toolbar buttons to **copy** the transcript or **save** it as `.txt`
+6. Use the toolbar buttons to **copy** the transcript as plain text, or open the
+   **save** menu and pick a format: `.txt` (plain text), `.srt` and `.vtt`
+   (subtitles, with the timestamps whisper.cpp reported), `.lrc` (lyrics) or
+   `.json` (timed segments, versioned schema). The chosen menu entry decides
+   the content; the filename you type in the dialog does not affect it.
 
 ### Desktop launcher (optional)
 
@@ -217,9 +222,11 @@ update-desktop-database ~/.local/share/applications/
 
 When you press **Transcribe**, `ffmpeg` decodes the selected file to a
 temporary 16 kHz mono WAV file. `whisper-cli` then transcribes that WAV, and
-Shept parses the timestamped segments from its output as they arrive and
-appends them to the text view, using the segment timestamps to drive the
-progress bar. The temporary WAV is removed when the run finishes or fails.
+Shept parses the timestamped segments from its output as they arrive. Each
+segment keeps its start and end time: the text is appended to the text view,
+the end time drives the progress bar, and the stored segments are what the
+subtitle, lyrics and JSON exports are built from. The temporary WAV is removed
+when the run finishes or fails.
 
 ## Performance notes
 

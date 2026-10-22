@@ -1,13 +1,29 @@
-"""GTK-free helpers for running ffmpeg/whisper-cli and parsing their output."""
+"""GTK-free helpers for running ffmpeg/whisper-cli and parsing their output.
+
+This module also owns the transcript data model and the export formatters, so
+that the parsing and every output format can be tested without PyGObject.
+"""
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 LINE_RE = re.compile(
     r"^\[(\d\d:\d\d:\d\d\.\d{3})\s*-->\s*(\d\d:\d\d:\d\d\.\d{3})\]\s+(.*)$"
 )
+
+
+@dataclass(frozen=True)
+class Segment:
+    """One whisper-cli output segment, with millisecond timing."""
+
+    start_ms: int
+    end_ms: int
+    text: str
 
 
 def build_ffmpeg_cmd(input_path: Path, wav_path: Path) -> list[str]:
@@ -67,15 +83,119 @@ def parse_progress_line(line: str) -> float | None:
         return None
 
 
-def parse_segment(line: str) -> tuple[str, str] | None:
-    """Return `(end_timestamp, text)` for a whisper-cli segment line, else None."""
+def parse_segment(line: str) -> Segment | None:
+    """Return the `Segment` for a whisper-cli output line, else None."""
     match = LINE_RE.match(line)
     if match is None:
         return None
-    return match.group(2), match.group(3).strip()
+    return Segment(
+        start_ms=ts_to_ms(match.group(1)),
+        end_ms=ts_to_ms(match.group(2)),
+        text=match.group(3).strip(),
+    )
+
+
+def ts_to_ms(ts: str) -> int:
+    """Convert a `HH:MM:SS.mmm` timestamp to integer milliseconds.
+
+    Parsed as text rather than through `float` so that values such as
+    `00:00:59.999` stay exact instead of drifting to 59998 ms.
+    """
+    hours, minutes, rest = ts.split(":")
+    seconds, _, millis = rest.partition(".")
+    millis = (millis + "000")[:3]
+    return (
+        int(hours) * 3_600_000
+        + int(minutes) * 60_000
+        + int(seconds) * 1000
+        + int(millis)
+    )
 
 
 def ts_to_seconds(ts: str) -> float:
     """Convert a `HH:MM:SS.mmm` timestamp to seconds."""
-    hours, minutes, seconds = ts.split(":")
-    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    return ts_to_ms(ts) / 1000.0
+
+
+def ms_to_ts(ms: int, separator: str = ".") -> str:
+    """Format milliseconds as `HH:MM:SS<sep>mmm` (srt passes a comma)."""
+    hours, rest = divmod(max(0, ms), 3_600_000)
+    minutes, rest = divmod(rest, 60_000)
+    seconds, millis = divmod(rest, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{millis:03d}"
+
+
+def format_txt(segments: Sequence[Segment]) -> str:
+    """Plain transcript: one line per segment, no timestamps."""
+    return "".join(f"{segment.text}\n" for segment in segments)
+
+
+def format_srt(segments: Sequence[Segment]) -> str:
+    """SubRip subtitles, numbered from 1, with comma milliseconds."""
+    blocks = [
+        f"{number}\n"
+        f"{ms_to_ts(segment.start_ms, ',')} --> "
+        f"{ms_to_ts(segment.end_ms, ',')}\n"
+        f"{segment.text}\n\n"
+        for number, segment in enumerate(segments, start=1)
+    ]
+    return "".join(blocks)
+
+
+def format_vtt(segments: Sequence[Segment]) -> str:
+    """WebVTT subtitles, with dot milliseconds."""
+    blocks = [
+        f"{ms_to_ts(segment.start_ms)} --> {ms_to_ts(segment.end_ms)}\n"
+        f"{segment.text}\n\n"
+        for segment in segments
+    ]
+    return "WEBVTT\n\n" + "".join(blocks)
+
+
+def format_lrc(segments: Sequence[Segment]) -> str:
+    """LRC lyrics: `[mm:ss.xx]text`, minutes counting past 59."""
+    lines = []
+    for segment in segments:
+        minutes, rest = divmod(max(0, segment.start_ms), 60_000)
+        seconds, millis = divmod(rest, 1000)
+        centis = millis // 10
+        lines.append(f"[{minutes:02d}:{seconds:02d}.{centis:02d}]{segment.text}\n")
+    return "".join(lines)
+
+
+def format_json(segments: Sequence[Segment]) -> str:
+    """Stable JSON export; the schema is versioned for future changes."""
+    payload = {
+        "version": 1,
+        "segments": [
+            {
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "text": segment.text,
+            }
+            for segment in segments
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+Formatters = dict[str, Callable[[Sequence[Segment]], str]]
+
+#: Extension -> formatter. The extension is also the key the UI uses to pick
+#: the format, so it never has to guess from the filename the user typed.
+EXPORTERS: Formatters = {
+    "txt": format_txt,
+    "srt": format_srt,
+    "vtt": format_vtt,
+    "lrc": format_lrc,
+    "json": format_json,
+}
+
+#: Extension -> human label, in the order the export menu should show them.
+EXPORT_LABELS: dict[str, str] = {
+    "txt": "Plain text",
+    "srt": "Subtitles",
+    "vtt": "WebVTT",
+    "lrc": "Lyrics",
+    "json": "JSON",
+}
