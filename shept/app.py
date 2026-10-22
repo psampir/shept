@@ -72,6 +72,7 @@ from shept.transcribe import (  # noqa: E402
     ms_to_ts,
     parse_progress_line,
     parse_segment,
+    read_tail,
     stop_process,
 )
 
@@ -987,33 +988,40 @@ class SheptWindow(Adw.ApplicationWindow):
         if self._cancel.is_set():
             raise _Cancelled
         duration = self._probe_duration(job.path)
-        proc = subprocess.Popen(
-            build_ffmpeg_cmd(job.path, wav_path),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
-        self._proc = proc
-        try:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                if self._cancel.is_set():
-                    stop_process(proc)
-                    break
-                secs = parse_progress_line(line)
-                if secs is None or duration <= 0:
-                    continue
-                frac = max(0.0, min(1.0, secs / duration))
-                self._idle(self._job_progress, job, frac, "Decoding audio…")
-        finally:
-            ret = proc.wait()
-            self._proc = None
+        # Diagnostics go to a file inside the job's temporary directory, never
+        # to an unread pipe: a damaged file makes ffmpeg log hundreds of
+        # kilobytes, the 64 KiB pipe buffer fills, and the child then blocks in
+        # write() while this thread waits for stdout to end — a deadlock that
+        # never reaches wait(). The file is removed with the directory.
+        stderr_path = wav_path.with_name("ffmpeg-stderr.log")
+        with stderr_path.open("wb") as stderr_file:
+            proc = subprocess.Popen(
+                build_ffmpeg_cmd(job.path, wav_path),
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+                bufsize=1,
+            )
+            self._proc = proc
+            try:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    if self._cancel.is_set():
+                        stop_process(proc)
+                        break
+                    secs = parse_progress_line(line)
+                    if secs is None or duration <= 0:
+                        continue
+                    frac = max(0.0, min(1.0, secs / duration))
+                    self._idle(self._job_progress, job, frac, "Decoding audio…")
+            finally:
+                ret = proc.wait()
+                self._proc = None
         if self._cancel.is_set():
             raise _Cancelled
         if ret != 0:
-            message = (proc.stderr.read() if proc.stderr else "") or "unknown error"
-            raise RuntimeError(f"ffmpeg failed: {message.strip()}")
+            message = read_tail(stderr_path) or "unknown error"
+            raise RuntimeError(f"ffmpeg failed: {message}")
 
     def _transcribe(
         self,

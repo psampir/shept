@@ -7,6 +7,7 @@ that the parsing and every output format can be tested without PyGObject.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from collections.abc import Callable, Sequence
@@ -23,6 +24,11 @@ STOP_TIMEOUT = 2.0
 #: After SIGKILL the child is gone almost immediately; this only bounds the
 #: wait so a stuck kernel state cannot hang the UI thread.
 KILL_TIMEOUT = 1.0
+
+#: How much of a failed child's stderr is kept for the error message. A damaged
+#: media file can make ffmpeg log hundreds of kilobytes; only the tail is ever
+#: shown, and reading all of it would be pointless.
+STDERR_TAIL_BYTES = 2048
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,9 @@ def build_ffmpeg_cmd(input_path: Path, wav_path: Path) -> list[str]:
         "-hide_banner",
         "-loglevel",
         "error",
+        # Without -nostdin a keystroke on the terminal that started Shept is
+        # read as an ffmpeg command and can abort the decode.
+        "-nostdin",
         "-nostats",
         "-progress",
         "pipe:1",
@@ -112,6 +121,25 @@ def stop_process(
         proc.wait(timeout=KILL_TIMEOUT)
     except subprocess.TimeoutExpired:
         pass
+
+
+def read_tail(path: Path, limit: int = STDERR_TAIL_BYTES) -> str:
+    """Return the last `limit` bytes of `path` as text, or "" when unreadable.
+
+    Child diagnostics go to a temporary file rather than a pipe: an unread
+    pipe fills up at 64 KiB and then blocks the child inside `write()`, which
+    is exactly how a damaged file used to wedge a job forever. Only the tail
+    is ever shown, so that is all that is read back.
+    """
+    try:
+        with Path(path).open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max(0, limit)))
+            data = handle.read(limit)
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace").strip()
 
 
 def parse_progress_line(line: str) -> float | None:

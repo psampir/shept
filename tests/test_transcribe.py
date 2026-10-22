@@ -26,6 +26,7 @@ from shept.transcribe import (
     ms_to_ts,
     parse_progress_line,
     parse_segment,
+    read_tail,
     stop_process,
     ts_to_ms,
     ts_to_seconds,
@@ -322,6 +323,7 @@ def test_build_ffmpeg_cmd_argv():
         "-hide_banner",
         "-loglevel",
         "error",
+        "-nostdin",
         "-nostats",
         "-progress",
         "pipe:1",
@@ -335,6 +337,13 @@ def test_build_ffmpeg_cmd_argv():
         "/tmp/out.wav",
         "-y",
     ]
+
+
+def test_build_ffmpeg_cmd_disables_the_controlling_terminal():
+    """A keystroke in the launching terminal must not reach ffmpeg's stdin."""
+    cmd = build_ffmpeg_cmd(Path("/tmp/in.mp3"), Path("/tmp/out.wav"))
+
+    assert "-nostdin" in cmd
 
 
 def test_build_ffmpeg_cmd_keeps_paths_with_spaces_intact():
@@ -384,6 +393,27 @@ def test_build_whisper_cmd_keeps_paths_with_spaces_intact():
 
 
 # ------------------------------------------------------------- process control
+
+
+def test_read_tail_returns_the_last_bytes_of_a_file(tmp_path):
+    log = tmp_path / "stderr.log"
+    log.write_text("first problem\nlast problem\n", encoding="utf-8")
+
+    assert read_tail(log) == "first problem\nlast problem"
+
+
+def test_read_tail_caps_a_huge_log_at_the_end(tmp_path):
+    log = tmp_path / "stderr.log"
+    log.write_text("x" * 100_000 + "the real reason\n", encoding="utf-8")
+
+    tail = read_tail(log, limit=64)
+
+    assert tail.endswith("the real reason")
+    assert len(tail) <= 64
+
+
+def test_read_tail_of_a_missing_file_is_empty(tmp_path):
+    assert read_tail(tmp_path / "gone.log") == ""
 
 
 def test_stop_process_terminates_a_running_child():
