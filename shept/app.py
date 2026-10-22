@@ -256,7 +256,14 @@ class SheptWindow(Adw.ApplicationWindow):
             f = dialog.open_finish(result)
         except GLib.Error:
             return
-        path = Path(f.get_path())
+        self.set_input_file(Path(f.get_path()))
+
+    def set_input_file(self, path: Path) -> None:
+        """Select `path` as the input to transcribe.
+
+        Used both by the file dialog and by files opened from the command line
+        or the desktop, so there is a single code path for choosing an input.
+        """
         self._input_file = path
         self.file_row.set_subtitle(str(path))
         self._update_run_state()
@@ -442,11 +449,37 @@ class SheptWindow(Adw.ApplicationWindow):
 
 class SheptApp(Adw.Application):
     def __init__(self) -> None:
-        super().__init__(application_id=APP_ID)
+        # HANDLES_OPEN is what makes the MimeType= entries in the desktop file
+        # work: double-clicking a media file, or running `shept file.mp4`, is
+        # delivered here through do_open() instead of being ignored.
+        super().__init__(
+            application_id=APP_ID,
+            flags=Gio.ApplicationFlags.HANDLES_OPEN,
+        )
 
     def do_activate(self) -> None:
         win = self.get_active_window() or SheptWindow(self)
         win.present()
+
+    def do_open(self, files, n_files: int, _hint: str) -> None:
+        """Load a file passed on the command line or from the desktop."""
+        win = self.get_active_window() or SheptWindow(self)
+        win.present()
+        if not files:
+            return
+
+        gfile = files[0]
+        path_str = gfile.get_path() if gfile is not None else None
+        if path_str is None:
+            uri = gfile.get_uri() if gfile is not None else ""
+            win.status.set_text(f"Cannot open {uri}: not a local file.")
+            return
+
+        path = Path(path_str)
+        if not path.is_file():
+            win.status.set_text(f"Cannot open {path}: no such file.")
+            return
+        win.set_input_file(path)
 
 
 def main() -> int:
