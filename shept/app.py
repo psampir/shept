@@ -29,12 +29,14 @@ from shept.environment import (  # noqa: E402
     LANGUAGES,
     MODELS_URL,
     REQUIRED_TOOLS,
+    best_translation_model,
     default_language,
     detect_backend,
     discover_models,
     install_hint,
     model_display_name,
     model_search_paths,
+    model_translates,
 )
 from shept.models import (  # noqa: E402
     CATALOG,
@@ -245,6 +247,29 @@ class SheptWindow(Adw.ApplicationWindow):
             subtitle="Output English translation instead of source-language transcript",
         )
         group.add(self.translate_row)
+        self.translate_row.connect("notify::active", self._on_translate_toggled)
+
+        # Inline warning, as close to the switch as the group allows: the turbo
+        # models were trained without translation data, so whisper-cli copies
+        # the source text when asked to translate. Shown only while the switch
+        # is on and the model that would run cannot translate.
+        self.translate_warning = Adw.ActionRow()
+        self.translate_warning.set_activatable(False)
+        self.translate_warning.set_visible(False)
+        self.translate_warning.add_css_class("warning")
+        warning_icon = Gtk.Image.new_from_icon_name("dialog-warning-symbolic")
+        warning_icon.set_valign(Gtk.Align.CENTER)
+        self.translate_warning.add_prefix(warning_icon)
+        self.translate_warning_label = Gtk.Label(xalign=0)
+        self.translate_warning_label.set_wrap(True)
+        self.translate_warning_label.add_css_class("caption")
+        self.translate_warning.set_child(self.translate_warning_label)
+        self.translate_warning_btn = Gtk.Button()
+        self.translate_warning_btn.set_valign(Gtk.Align.CENTER)
+        self.translate_warning_btn.connect("clicked", self._on_use_translation_model)
+        self.translate_warning.add_suffix(self.translate_warning_btn)
+        group.add(self.translate_warning)
+        self.model_row.connect("notify::selected", self._on_model_selected)
 
         self.run_btn = Gtk.Button(label="Transcribe")
         self.run_btn.add_css_class("suggested-action")
@@ -355,7 +380,68 @@ class SheptWindow(Adw.ApplicationWindow):
             self.model_row.set_selected(index)
 
         self._hint_box.set_visible(not self._models)
+        self._update_translate_warning()
         self._update_run_state()
+
+    def _on_translate_toggled(self, *_args) -> None:
+        self._update_translate_warning()
+
+    def _on_model_selected(self, *_args) -> None:
+        self._update_translate_warning()
+
+    def _on_use_translation_model(self, _btn: Gtk.Button) -> None:
+        """Switch the dropdown to the recommended model that can translate."""
+        replacement = best_translation_model(self._models)
+        if replacement is None:
+            return
+        name = model_display_name(replacement)
+        for index, model in enumerate(self._models):
+            if model_display_name(model) == name:
+                self.model_row.set_selected(index)
+                break
+        self._update_translate_warning()
+
+    def _update_translate_warning(self) -> None:
+        """Show or hide the "this model cannot translate" hint, live.
+
+        While a batch is running the text describes the model the batch is
+        actually using, not the one the dropdown now shows: changing the
+        dropdown mid-run does not change what is being transcribed.
+        """
+        selected = self._selected_model()
+        model = selected
+        if self.queue.is_running and self._run_model is not None:
+            model = self._run_model
+        if not self.translate_row.get_active() or model is None:
+            self.translate_warning.set_visible(False)
+            return
+        if model_translates(model):
+            self.translate_warning.set_visible(False)
+            return
+
+        name = model_display_name(model)
+        capable = best_translation_model(self._models)
+        text = (
+            f"{name} cannot translate — it was trained without translation "
+            "data and will copy the source text instead."
+        )
+        if capable is None:
+            text += " Use “Manage…” to download large-v3, medium, small, base or tiny."
+        self.translate_warning_label.set_text(text)
+
+        offered = capable is not None and (
+            selected is None
+            or model_display_name(capable) != model_display_name(selected)
+        )
+        if offered:
+            assert capable is not None
+            capable_name = model_display_name(capable)
+            self.translate_warning_btn.set_label(f"Use {capable_name}")
+            self.translate_warning_btn.set_tooltip_text(
+                f"Switch to {capable_name}, which can translate"
+            )
+        self.translate_warning_btn.set_visible(offered)
+        self.translate_warning.set_visible(True)
 
     def _on_manage_models(self, _btn: Gtk.Button) -> None:
         if self._model_dialog is not None:
@@ -610,6 +696,8 @@ class SheptWindow(Adw.ApplicationWindow):
 
     def _finish_batch(self) -> None:
         """Return the window to its idle state and summarise the batch."""
+        run_model = self._run_model
+        translate = self._run_translate
         self._run_model = None
         self.progress.set_visible(False)
         self.progress.set_text("")
@@ -625,7 +713,15 @@ class SheptWindow(Adw.ApplicationWindow):
             parts.append(f"{counts[JobState.FAILED]} failed")
         if counts[JobState.CANCELLED]:
             parts.append(f"{counts[JobState.CANCELLED]} cancelled")
-        self.status.set_text("Queue finished: " + ", ".join(parts) + ".")
+        summary = "Queue finished: " + ", ".join(parts) + "."
+        if translate and run_model is not None and not model_translates(run_model):
+            # Do not let "done" imply that the requested English output exists:
+            # the turbo models copy the source text when asked to translate.
+            summary += (
+                f" {model_display_name(run_model)} cannot translate — the text "
+                "is in the source language."
+            )
+        self.status.set_text(summary)
 
     def _on_cancel_clicked(self, _btn: Gtk.Button) -> None:
         """Abandon the running job and leave the rest of the queue pending."""
@@ -997,10 +1093,12 @@ class ModelDownloadDialog(Adw.Window):
     # ---------------------------------------------------------------- widgets
 
     def _add_entry(self, spec: ModelSpec) -> None:
-        row = Adw.ActionRow(
-            title=spec.name,
-            subtitle=f"{human_size(spec.size_bytes)} · {spec.note}",
-        )
+        subtitle = f"{human_size(spec.size_bytes)} · {spec.note}"
+        if not spec.translates:
+            # Say so before a download: the turbo models cannot translate, so
+            # the Translate switch in the main window does nothing for them.
+            subtitle += " · transcription only — cannot translate"
+        row = Adw.ActionRow(title=spec.name, subtitle=subtitle)
         progress = Gtk.ProgressBar()
         progress.set_show_text(True)
         progress.set_visible(False)

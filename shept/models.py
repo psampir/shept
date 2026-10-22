@@ -40,9 +40,14 @@ class ModelSpec:
     size_bytes: int
     url: str
     note: str
+    #: False for models fine-tuned without translation data. The turbo models
+    #: are transcription-only: `--translate` on them copies the source text
+    #: verbatim instead of translating it, so the UI must not promise English
+    #: output for them.
+    translates: bool = True
 
 
-def _spec(name: str, size_bytes: int, note: str) -> ModelSpec:
+def _spec(name: str, size_bytes: int, note: str, translates: bool = True) -> ModelSpec:
     filename = f"ggml-{name}.bin"
     return ModelSpec(
         name=name,
@@ -50,6 +55,7 @@ def _spec(name: str, size_bytes: int, note: str) -> ModelSpec:
         size_bytes=size_bytes,
         url=f"{BASE_URL}/{filename}",
         note=note,
+        translates=translates,
     )
 
 
@@ -60,11 +66,17 @@ CATALOG: tuple[ModelSpec, ...] = (
         "large-v3-turbo",
         1_624_555_275,
         "best accuracy/speed balance",
+        # OpenAI fine-tuned the turbo models without translation data, so the
+        # `--translate` flag has no effect on them (stated in the
+        # large-v3-turbo release notes). Transcribing only — use large-v3,
+        # medium, small, base or tiny to translate.
+        translates=False,
     ),
     _spec(
         "large-v3-turbo-q5_0",
         574_041_195,
         "same model, quantized — a third of the size",
+        translates=False,
     ),
     _spec(
         "small",
