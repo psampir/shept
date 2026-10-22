@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import signal
 import subprocess
@@ -29,8 +30,10 @@ from shept.transcribe import (
     probe_duration,
     read_tail,
     stop_process,
+    summarize_error,
     ts_to_ms,
     ts_to_seconds,
+    write_text_atomic,
 )
 
 SEGMENTS = [
@@ -476,6 +479,81 @@ def test_probe_duration_registers_and_releases_the_child(tmp_path):
     assert len(seen) == 2
     assert isinstance(seen[0], subprocess.Popen)
     assert seen[1] is None
+
+
+# -------------------------------------------------------------- error summaries
+
+
+def test_summarize_error_keeps_the_first_two_lines():
+    text = "ffmpeg failed: Header missing\nSecond line\nThird line"
+
+    assert summarize_error(text) == "ffmpeg failed: Header missing Second line"
+
+
+def test_summarize_error_caps_very_long_text():
+    summary = summarize_error("x" * 2_000)
+
+    assert len(summary) <= 500
+    assert summary.endswith("…")
+
+
+def test_summarize_error_of_blank_text_is_empty():
+    assert summarize_error("\n\n   \n") == ""
+
+
+# ------------------------------------------------------------ atomic file write
+
+
+def test_write_text_atomic_writes_the_file(tmp_path):
+    target = tmp_path / "talk.txt"
+
+    assert write_text_atomic(target, "Dzień dobry\n") == target
+    assert target.read_text(encoding="utf-8") == "Dzień dobry\n"
+
+
+def test_write_text_atomic_replaces_an_existing_file(tmp_path):
+    target = tmp_path / "talk.txt"
+    target.write_text("old\n", encoding="utf-8")
+
+    write_text_atomic(target, "new\n")
+
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_write_text_atomic_leaves_no_temporary_file(tmp_path):
+    write_text_atomic(tmp_path / "talk.txt", "text\n")
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["talk.txt"]
+
+
+def test_write_text_atomic_failure_keeps_the_old_file(tmp_path, monkeypatch):
+    target = tmp_path / "talk.txt"
+    target.write_text("old\n", encoding="utf-8")
+
+    def boom(_src, _dst):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr("shept.transcribe.os.replace", boom)
+
+    with pytest.raises(OSError, match="No space left"):
+        write_text_atomic(target, "new\n")
+
+    assert target.read_text(encoding="utf-8") == "old\n"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["talk.txt"]
+
+
+def test_write_text_atomic_failure_on_write_removes_the_temporary_file(
+    tmp_path, monkeypatch
+):
+    def failing_write(self, *_args, **_kwargs):
+        raise OSError(errno.ENAMETOOLONG, "File name too long")
+
+    monkeypatch.setattr(Path, "write_text", failing_write)
+
+    with pytest.raises(OSError, match="File name too long"):
+        write_text_atomic(tmp_path / "talk.txt", "text\n")
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_stop_process_terminates_a_running_child():

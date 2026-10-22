@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from shept.transcribe import EXPORTERS, Segment
+from shept.transcribe import EXPORTERS, Segment, write_text_atomic
 
 
 class JobState(Enum):
@@ -32,6 +32,11 @@ class JobState(Enum):
 
 #: States a job never leaves on its own.
 FINISHED_STATES = frozenset({JobState.DONE, JobState.FAILED, JobState.CANCELLED})
+
+#: Longest stem, in UTF-8 bytes, that an exported file may use. `NAME_MAX` is
+#: 255 bytes almost everywhere; the headroom covers a ` (123)` collision suffix
+#: and the extension, so one over-long source name cannot abort a batch export.
+MAX_EXPORT_STEM_BYTES = 200
 
 
 @dataclass(eq=False)
@@ -182,12 +187,15 @@ class Queue:
 
 
 def export_all(jobs: Iterable[Job], fmt: str, dest_dir: Path) -> list[Path]:
-    """Write every job that produced segments to `<dest_dir>/<stem>.<fmt>`.
+    """Write every successfully finished job to `<dest_dir>/<stem>.<fmt>`.
 
-    Jobs without segments (pending, or failed before the first segment) are
-    skipped, so exporting a half-run queue never creates empty files. Two jobs
-    with the same file name get ` (2)`, ` (3)`, … appended to the stem instead
-    of overwriting each other. Returns the paths written, in queue order.
+    Only `DONE` jobs with segments are written: a failed or cancelled file may
+    hold a partial transcript, and "Export all" must not pass half a recording
+    off as the result. Jobs without segments (pending, or failed before the
+    first segment) are skipped too, so a half-run queue never creates empty
+    files. Files already in `dest_dir` are never overwritten — the new one gets
+    ` (2)`, ` (3)`, … appended — and over-long stems are cut so `NAME_MAX`
+    cannot abort the batch midway. Returns the paths written, in queue order.
     """
     formatter = EXPORTERS.get(fmt)
     if formatter is None:
@@ -198,23 +206,47 @@ def export_all(jobs: Iterable[Job], fmt: str, dest_dir: Path) -> list[Path]:
 
     written: list[Path] = []
     taken: set[Path] = set()
-    for job in jobs:
-        if not job.segments:
-            continue
-        target = _free_path(dest_dir / f"{job.path.stem}.{fmt}", taken)
-        target.write_text(formatter(job.segments), encoding="utf-8")
+    for job in exportable_jobs(jobs):
+        stem = export_stem(job.path.stem)
+        target = _free_path(dest_dir / f"{stem}.{fmt}", taken)
+        write_text_atomic(target, formatter(job.segments))
         taken.add(target)
         written.append(target)
     return written
 
 
+def exportable_jobs(jobs: Iterable[Job]) -> list[Job]:
+    """The jobs "Export all" writes: finished successfully, with text."""
+    return [job for job in jobs if job.state is JobState.DONE and job.segments]
+
+
+def export_stem(name: str) -> str:
+    """Return `name` cut to the export byte budget, never mid-character."""
+    encoded = name.encode("utf-8")
+    if len(encoded) <= MAX_EXPORT_STEM_BYTES:
+        return name
+    return encoded[:MAX_EXPORT_STEM_BYTES].decode("utf-8", errors="ignore")
+
+
 def _free_path(path: Path, taken: set[Path]) -> Path:
     """Return `path`, or `stem (2).ext`, `stem (3).ext`, … when it is used."""
-    if path not in taken:
+    if not _is_used(path, taken):
         return path
     counter = 2
     while True:
         candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
-        if candidate not in taken:
+        if not _is_used(candidate, taken):
             return candidate
         counter += 1
+
+
+def _is_used(path: Path, taken: set[Path]) -> bool:
+    """True when this batch wrote `path` already, or it exists on disk."""
+    if path in taken:
+        return True
+    try:
+        return path.exists()
+    except OSError:
+        # An unreadable directory entry is not proof the path is free; the
+        # write itself will report the real problem.
+        return False

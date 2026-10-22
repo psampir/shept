@@ -147,6 +147,51 @@ def read_tail(path: Path, limit: int = STDERR_TAIL_BYTES) -> str:
     return data.decode("utf-8", errors="replace").strip()
 
 
+#: How much of a child's diagnostics a queue row shows. The subtitle holds one
+#: line; the tooltip holds everything the error carries.
+ERROR_SUMMARY_LINES = 2
+ERROR_SUMMARY_CHARS = 500
+
+
+def summarize_error(
+    text: str,
+    *,
+    lines: int = ERROR_SUMMARY_LINES,
+    limit: int = ERROR_SUMMARY_CHARS,
+) -> str:
+    """Shorten child diagnostics so they fit a queue row's subtitle.
+
+    ffmpeg repeats one `Header missing` line per damaged frame, so the first
+    lines are the useful part; the complete text stays in the row's tooltip.
+    """
+    kept = [line.strip() for line in text.splitlines() if line.strip()]
+    if not kept:
+        return ""
+    summary = " ".join(kept[:lines])
+    if len(summary) > limit:
+        summary = summary[: max(1, limit - 1)].rstrip() + "…"
+    return summary
+
+
+def write_text_atomic(target: Path, text: str) -> Path:
+    """Write `text` to `target` without leaving a partial file at that path.
+
+    The text goes to `<name>.tmp` beside the target and is moved into place
+    with `os.replace`, so a full disk or a vanished portal path cannot replace
+    an existing transcript with half a file. Failures remove the temporary file
+    and propagate the `OSError`; reporting it is the caller's job.
+    """
+    target = Path(target)
+    tmp = target.with_name(target.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    return target
+
+
 def build_ffprobe_cmd(media: Path, binary: str = "ffprobe") -> list[str]:
     """Build the ffprobe argv that prints `media`'s duration in seconds."""
     return [

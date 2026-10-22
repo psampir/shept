@@ -60,7 +60,7 @@ from shept.models import (  # noqa: E402
     is_downloaded,
     vad_state_text,
 )
-from shept.queue import Job, JobState, Queue, export_all  # noqa: E402
+from shept.queue import Job, JobState, Queue, export_all, exportable_jobs  # noqa: E402
 from shept.settings import Settings  # noqa: E402
 from shept.transcribe import (  # noqa: E402
     EXPORT_LABELS,
@@ -75,6 +75,8 @@ from shept.transcribe import (  # noqa: E402
     probe_duration,
     read_tail,
     stop_process,
+    summarize_error,
+    write_text_atomic,
 )
 
 #: How long the close handler waits for the worker to unwind after the child
@@ -524,7 +526,13 @@ class SheptWindow(Adw.ApplicationWindow):
         if self._model_dialog is not None:
             self._model_dialog.present()
             return
-        self._model_dialog = ModelDownloadDialog(self)
+        try:
+            self._model_dialog = ModelDownloadDialog(self)
+        except OSError as exc:
+            # `download_dir()` creates the directory; an unwritable
+            # $XDG_DATA_HOME used to make this button do nothing at all.
+            self.status.set_text(f"Could not open the model downloader: {exc}")
+            return
         self._model_dialog.connect("close-request", self._on_model_dialog_closed)
         self._model_dialog.present()
 
@@ -1171,7 +1179,13 @@ class SheptWindow(Adw.ApplicationWindow):
         if target is None:
             return
         formatter = EXPORTERS.get(ext, format_txt)
-        Path(target).write_text(formatter(job.segments), encoding="utf-8")
+        try:
+            write_text_atomic(Path(target), formatter(job.segments))
+        except OSError as exc:
+            # A read-only target, a full disk or an over-long name lands here;
+            # raising inside a GTK callback would show the user nothing at all.
+            self.status.set_text(f"Could not save {target}: {exc}")
+            return
         self.status.set_text(f"Saved: {target}")
 
     def _on_export_all(
@@ -1184,7 +1198,7 @@ class SheptWindow(Adw.ApplicationWindow):
         The format is whichever one was last chosen from the per-file section
         of the menu, plain text until then.
         """
-        if not any(job.segments for job in self.queue.jobs):
+        if not exportable_jobs(self.queue.jobs):
             self.status.set_text("Nothing to export yet.")
             return
         dialog = Gtk.FileDialog(title="Choose a folder for the transcripts")
@@ -1247,6 +1261,12 @@ class JobRow(Adw.ActionRow):
         job = self.job
         self.set_title(job.display_name)
         self.set_subtitle(state_text(job))
+        # The subtitle is capped to a couple of lines; the tooltip keeps the
+        # whole message so a failure stays diagnosable.
+        tooltip = str(job.path)
+        if job.state is JobState.FAILED and job.error:
+            tooltip = f"{tooltip}\n\n{job.error}"
+        self.set_tooltip_text(tooltip)
         running = job.state is JobState.RUNNING
         self.progress.set_visible(running)
         self.progress.set_fraction(job.progress)
@@ -1270,7 +1290,7 @@ def state_text(job: Job) -> str:
         count = len(job.segments)
         return f"Done — {count} {'segment' if count == 1 else 'segments'}"
     if job.state is JobState.FAILED:
-        return f"Failed: {job.error or 'unknown error'}"
+        return f"Failed: {summarize_error(job.error or 'unknown error')}"
     return "Cancelled"
 
 

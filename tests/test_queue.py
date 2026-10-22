@@ -405,3 +405,56 @@ def test_export_all_rejects_unknown_formats(media, tmp_path):
 
     with pytest.raises(ValueError):
         export_all(queue.jobs, "docx", tmp_path)
+
+
+def test_export_all_does_not_overwrite_a_file_in_the_destination(media, tmp_path):
+    queue = _queue_of(media("talk.mp3"))
+    queue.mark_done(queue.jobs[0], SEGMENTS)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    existing = dest / "talk.txt"
+    existing.write_text("hand-written notes\n", encoding="utf-8")
+
+    written = export_all(queue.jobs, "txt", dest)
+
+    assert [path.name for path in written] == ["talk (2).txt"]
+    assert existing.read_text(encoding="utf-8") == "hand-written notes\n"
+
+
+def test_export_all_does_not_overwrite_in_any_format(media, tmp_path):
+    queue = _queue_of(media("talk.mp3"))
+    queue.mark_done(queue.jobs[0], SEGMENTS)
+    (tmp_path / "talk.srt").write_text("keep", encoding="utf-8")
+
+    written = export_all(queue.jobs, "srt", tmp_path)
+
+    assert [path.name for path in written] == ["talk (2).srt"]
+    assert (tmp_path / "talk.srt").read_text(encoding="utf-8") == "keep"
+
+
+def test_export_all_truncates_an_over_long_stem(tmp_path):
+    """NAME_MAX is 255 bytes; a 250-character stem must not abort a batch."""
+    long_stem = "ł" * 250  # two bytes per character in UTF-8
+    job = Job(path=tmp_path / f"{long_stem}.mp3")
+    Queue().mark_done(job, SEGMENTS)
+
+    written = export_all([job], "txt", tmp_path / "out")
+
+    assert len(written) == 1
+    name = written[0].name
+    assert name.isprintable()
+    assert len(name.encode("utf-8")) <= 210
+    assert written[0].is_file()
+
+
+def test_export_all_reports_a_write_failure(media, tmp_path, monkeypatch):
+    queue = _queue_of(media("talk.mp3"))
+    queue.mark_done(queue.jobs[0], SEGMENTS)
+
+    def failing_write(target, _text):
+        raise OSError(f"Read-only file system: {target}")
+
+    monkeypatch.setattr("shept.queue.write_text_atomic", failing_write)
+
+    with pytest.raises(OSError, match="Read-only file system"):
+        export_all(queue.jobs, "txt", tmp_path / "out")
