@@ -1942,7 +1942,13 @@ class LanguagePicker(Adw.Window):
             self.search_entry.get_text(), self._favourites, self._preferred
         )
         for language in results:
-            row = self._make_row(language)
+            action_row = self._make_row(language)
+            # Gtk.ListBox only emits row-activated for real Gtk.ListBoxRow
+            # children: an Adw.ActionRow appended directly is rendered but never
+            # treated as a row, so clicks did nothing and only Enter worked.
+            row = Gtk.ListBoxRow()
+            row.set_child(action_row)
+            row.set_activatable(True)
             self._codes[row] = language.code
             self.listbox.append(row)
 
