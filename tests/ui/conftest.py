@@ -23,12 +23,13 @@ gi = pytest.importorskip("gi")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw  # noqa: E402
-
-from shept.app import SheptWindow  # noqa: E402
+from shept.app import SheptApp, SheptWindow  # noqa: E402
 
 #: One application id for the whole session: GtkApplication is a singleton per
-#: process, and the tests only need somewhere to hang the windows on.
+#: process, and the tests only need somewhere to hang the windows on. The real
+#: class is used, not a plain `Adw.Application`, because the About window is
+#: reached through an action that only `SheptApp` installs; the id stays a test
+#: one so a Shept the developer has running does not win the bus name.
 TEST_APP_ID = "io.github.psampir.Shept.Tests"
 
 
@@ -45,12 +46,12 @@ class Sandbox:
 
 @pytest.fixture(scope="session")
 def app():
-    """A registered `Adw.Application` without a main loop.
+    """A registered `SheptApp` without a main loop.
 
     `register()` emits `startup`, which is what lets windows be added, and it
     succeeds without a session bus: the tests must not need one.
     """
-    application = Adw.Application(application_id=TEST_APP_ID)
+    application = SheptApp(application_id=TEST_APP_ID)
     assert application.register(None)
     return application
 

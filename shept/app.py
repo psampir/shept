@@ -23,7 +23,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from shept import APP_ID, settings  # noqa: E402
+from shept import APP_ID, __version__, settings  # noqa: E402
 from shept.environment import (  # noqa: E402
     INCOMPLETE_SUFFIX,
     MODELS_URL,
@@ -123,6 +123,12 @@ class _Cancelled(Exception):
     """Raised inside a worker thread when the user pressed Cancel."""
 
 
+#: The one sentence the About window adds to the name and the version. It says
+#: what the application does; the README has the long version.
+ABOUT_COMMENTS = (
+    "Turns audio and video files into text on this computer, one queued file at a time."
+)
+
 #: Shown in place of a trash button when a model cannot be removed. The
 #: Flatpak sentence matters: the sandbox mounts the home directory read-only,
 #: so a folder that looks writable on the host is not writable in there.
@@ -171,6 +177,36 @@ def confirm_destructive(
     else:
         dialog.present()
     return dialog
+
+
+def build_about_window(parent: Gtk.Window | None = None) -> Adw.AboutWindow:
+    """Build the About window for `parent`.
+
+    `Adw.AboutWindow` rather than `Adw.AboutDialog`: the dialog only exists
+    from libadwaita 1.5 and the Flatpak runtime still ships 1.4. The version
+    and the application id come from the package, so this window cannot drift
+    from the release the rest of the build reports, and the constructor is a
+    function of its own so the action, the menu and the tests share one code
+    path instead of building a dialog in a signal handler.
+    """
+    about = Adw.AboutWindow(
+        application_name="Shept",
+        application_icon=APP_ID,
+        version=__version__,
+        developer_name="Paweł Sampir",
+        developers=["Paweł Sampir"],
+        website="https://github.com/psampir/shept",
+        issue_url="https://github.com/psampir/shept/issues",
+        license_type=Gtk.License.MIT_X11,
+        copyright="© 2026 Paweł Sampir",
+        comments=ABOUT_COMMENTS,
+    )
+    # Transient windows follow their parent: an About window with no `Shept`
+    # window behind it would be the only thing on screen after a click on the
+    # taskbar entry.
+    if parent is not None:
+        about.set_transient_for(parent)
+    return about
 
 
 class SheptWindow(Adw.ApplicationWindow):
@@ -267,6 +303,17 @@ class SheptWindow(Adw.ApplicationWindow):
         self.save_btn.set_menu_model(self.export_menu)
         self.save_btn.set_sensitive(False)
         header.pack_end(self.save_btn)
+
+        # The primary menu: one item today, and the place where anything that
+        # is neither an action on a file nor an export belongs later. The item
+        # carries an `app.` action, so the window does not own the dialog.
+        menu = Gio.Menu()
+        menu.append("About Shept", "app.about")
+        self.menu_btn = Gtk.MenuButton()
+        self.menu_btn.set_icon_name("open-menu-symbolic")
+        self.menu_btn.set_tooltip_text("Main menu")
+        self.menu_btn.set_menu_model(menu)
+        header.pack_end(self.menu_btn)
 
         export_action = Gio.SimpleAction.new("export", GLib.VariantType.new("s"))
         export_action.connect("activate", self._on_export)
@@ -2124,14 +2171,35 @@ class LanguagePicker(Adw.Window):
 
 
 class SheptApp(Adw.Application):
-    def __init__(self) -> None:
+    def __init__(self, application_id: str = APP_ID) -> None:
         # HANDLES_OPEN is what makes the MimeType= entries in the desktop file
         # work: double-clicking a media file, or running `shept file.mp4`, is
         # delivered here through do_open() instead of being ignored.
         super().__init__(
-            application_id=APP_ID,
+            application_id=application_id,
             flags=Gio.ApplicationFlags.HANDLES_OPEN,
         )
+        #: The About window, while it is on screen. `Adw.AboutWindow` is not
+        #: owned by any widget, so without this reference the garbage
+        #: collector may take it away and the window vanish on its own.
+        self._about: Adw.AboutWindow | None = None
+        about_action = Gio.SimpleAction.new("about", None)
+        about_action.connect("activate", self._on_about)
+        self.add_action(about_action)
+
+    def _on_about(self, _action: Gio.SimpleAction, _param: object) -> None:
+        """Show the About window, or raise the one already on screen."""
+        if self._about is not None and self._about.get_visible():
+            self._about.present()
+            return
+        self._about = build_about_window(self.get_active_window())
+        self._about.connect("close-request", self._on_about_closed)
+        self._about.present()
+
+    def _on_about_closed(self, *_args: object) -> bool:
+        """Forget the closed window, so the next activation builds a new one."""
+        self._about = None
+        return False
 
     def do_activate(self) -> None:
         win = self.get_active_window() or SheptWindow(self)
