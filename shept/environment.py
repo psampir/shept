@@ -253,16 +253,18 @@ def is_flatpak(marker: Path = Path("/.flatpak-info")) -> bool:
 
 def missing_tools(
     tools: Sequence[str] = REQUIRED_TOOLS,
-    which: Callable[[str], str | None] = shutil.which,
+    which: Callable[[str], str | None] | None = None,
 ) -> list[str]:
     """The tools from `tools` that are not on PATH, in the given order.
 
     A missing ffprobe belongs in the banner too: without it every job reports
     0 % progress for its whole length, which looks like a hung run rather than
     a missing tool. `which` is injectable so the decision can be tested without
-    touching PATH.
+    touching PATH. It is resolved at call time, not bound as a default, so
+    replacing `shutil.which` also reaches this function.
     """
-    return [name for name in tools if which(name) is None]
+    lookup = shutil.which if which is None else which
+    return [name for name in tools if lookup(name) is None]
 
 
 def install_hint(tool: str) -> str:

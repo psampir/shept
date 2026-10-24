@@ -38,13 +38,47 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       # GTK/PyGObject is deliberately not installed: the suite must stay clean
-      # of `gi` imports, and this job proves it on every run.
+      # of `gi` imports, and this job proves it on every run. `tests/ui` needs
+      # GTK, so it skips itself here (module-level `pytest.importorskip("gi")`)
+      # and runs in the `ui-test` job below instead.
       - name: Install package with dev dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Run tests
         run: pytest -q
+
+  ui-test:
+    name: UI tests (GTK 4 / libadwaita)
+    # The window wiring has no coverage without a real GTK: the language
+    # picker was dead to clicks for two releases (0.1.0-0.1.2) because the
+    # GTK-free suite cannot construct a single widget. This job supplies GTK
+    # and a virtual X server; it is independent of the other jobs and installs
+    # nothing but the packages it needs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK 4, libadwaita and a virtual X server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi \
+            python3-gi-cairo \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
+            xvfb \
+            dbus-x11
+      # `gi` is a system package compiled for the system Python, so the venv
+      # inherits it (--system-site-packages) while pytest comes from pip into
+      # the venv, keeping the run independent of whatever the runner image has.
+      - name: Create a venv that can see the system PyGObject
+        run: |
+          python3 -m venv --system-site-packages /tmp/venv
+          /tmp/venv/bin/python -m pip install --upgrade pip
+          /tmp/venv/bin/python -m pip install "pytest>=7.4"
+      - name: Run the UI tests
+        run: |
+          xvfb-run -a env GDK_BACKEND=x11 /tmp/venv/bin/python -m pytest tests/ui -q
 
   build:
     runs-on: ubuntu-latest
