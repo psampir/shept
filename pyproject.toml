@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shept"
-version = "0.1.2"
+version = "0.2.0"
 description = "Local speech-to-text for your desktop, powered by whisper.cpp"
 readme = "README.md"
 requires-python = ">=3.10"

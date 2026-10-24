@@ -105,6 +105,21 @@
   </content_rating>
 
   <releases>
+    <release version="0.2.0" date="2026-10-24">
+      <description>
+        <p>Interrupted downloads finish, and the window never stops responding.</p>
+        <ul>
+          <li>An interrupted model download resumes where it stopped, and a
+          transfer that fails on a flaky connection is retried</li>
+          <li>A model file that is smaller than the published one is labelled
+          as incomplete in the dropdown and in the model manager</li>
+          <li>An About window shows the version, the licence and the project
+          links</li>
+          <li>Cancel and closing the window no longer freeze it for two
+          seconds while the running tool is stopped</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-10-23">
       <description>
         <p>Fixes a regression in the language picker.</p>

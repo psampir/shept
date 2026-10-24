@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-24
+
+### Added
+
+- Downloads resume after an interruption. A transfer is written to
+  `ggml-<model>.bin.part` and the next attempt asks the server for the bytes
+  from the file's current size on, so a 1.6 GB model finishes on a connection
+  that drops halfway instead of starting over from zero. A leftover that is
+  larger than the published file is discarded rather than resumed onto.
+
+- Recoverable download failures (a dropped connection, a timeout, an HTTP 5xx)
+  are retried three times with a growing wait before the download is declared
+  failed, and a cancel during one of those waits takes effect at once. A 4xx,
+  a full disk and a read-only folder fail immediately: no retry can fix them.
+
+- An About window, reached from the new header-bar menu: the application name,
+  icon, version, the MIT licence, the copyright line and links to the project
+  and its issue tracker. The version comes from `shept.__version__`, so it
+  cannot disagree with the installed package.
+
+- A model file that is smaller than the size Shept publishes for it is flagged
+  as `(incomplete)` in the model dropdown and as **Incomplete** in **Manage…**,
+  with a hint naming both sizes. It stays selectable and does not block
+  **Transcribe**: the file may still be a usable copy, and hiding it would look
+  like the model had vanished.
+
+- A GTK test suite under `tests/ui`, run in CI under Xvfb. It builds the real
+  widgets, so the wiring bugs the GTK-free suite cannot see (a list box whose
+  rows never emit `row-activated`, a Cancel that blocks the main loop, a
+  dropdown that does not follow the selection) now fail a test instead of
+  shipping.
+
+### Fixed
+
+- Cancelling a job, or closing the window, no longer freezes the window for
+  two seconds. `SIGTERM` is sent at once and a separate thread owns the
+  escalation to `SIGKILL`, so the main loop keeps painting "Cancelling…"
+  while the child is being stopped, and closing joins the worker for a tenth
+  of a second at most.
+
+- The Flatpak build no longer fails intermittently while generating the Vulkan
+  shaders. CI retries the build once, which covers the transient `glslc`
+  failure without hiding a manifest that is genuinely broken.
+
+### Known limitations
+
+- **The batch worker is not yet a GTK-free module**, so the queue's
+  run/finish/cancel transitions can only be tested at the `Queue` level. It is
+  deferred to a later release.
+
 ## [0.1.2] - 2026-10-23
 
 ### Fixed
@@ -177,19 +227,3 @@ First release.
 
 - `settings.json` is fsynced before being renamed into place, and stale
   `*.part` downloads are cleaned up.
-
-### Known limitations
-
-The following are known and deferred to 0.2:
-
-- **Cancel and close can block the main loop for 2–3 s** while the running
-  child is stopped with `SIGTERM` and then `SIGKILL`.
-
-- **Truncated model files are not detected against the catalogue sizes**; a
-  download cut short by a crash is only noticed when whisper-cli fails on it.
-
-- **Downloads cannot be resumed or retried**; an interrupted transfer starts
-  over from zero.
-
-- **The batch worker is not yet a GTK-free module**, so the queue's
-  run/finish/cancel transitions can only be tested at the `Queue` level.

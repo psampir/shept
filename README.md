@@ -29,7 +29,8 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
   command line
 - Transcribe locally with a Whisper model of your choice, one file after
   another, so a batch can run unattended
-- Download models from inside the app, with progress and cancellation
+- Download models from inside the app, with progress, cancellation and a
+  transfer that resumes where it stopped
 - Skip silence with whisper.cpp's Silero VAD, so silent stretches never reach
   the model and are not hallucinated into text
 - Every language whisper.cpp supports (all 100, auto-detect included) behind
@@ -39,6 +40,7 @@ Local speech-to-text for your desktop, powered by [whisper.cpp](https://github.c
   when the batch ends
 - Copy or save the selected file's transcript, or export every finished file
   at once: `.txt`, `.srt`, `.vtt`, `.lrc` or `.json`
+- See the version, the licence and the project links in the About window
 
 Everything runs on your machine: no accounts, no uploads, no network access
 during transcription. The only network access is a model download you start
@@ -177,7 +179,13 @@ into any of the directories Shept searches, in this order:
 
 Every `ggml-*.bin` file found in those directories shows up in the model
 dropdown; if the same model exists in several places, the first directory wins.
-The one exception is `ggml-silero-*.bin`, the voice-activity asset behind
+A model Shept knows the published size of is labelled `tiny (incomplete)` when
+the file on disk is shorter than that, and the hint below the dropdown names
+both sizes: a copy that was interrupted, or one that was still being written,
+would otherwise only be noticed when `whisper-cli` failed on it. The file stays
+selectable, because a short file may still transcribe something and hiding it
+would look like the model had vanished. The one exception is
+`ggml-silero-*.bin`, the voice-activity asset behind
 [Skipping silence](#skipping-silence): it is picked up from the same
 directories but never listed as a transcription model.
 
@@ -194,11 +202,23 @@ Downloads always go to `$XDG_DATA_HOME/shept/models`, which is
 searches and the only model directory that is writable inside the Flatpak
 sandbox, so a model downloaded there is visible to both the Flatpak and a
 source checkout. A transfer is written as `ggml-<model>.bin.part` and only
-renamed once it is complete, so an interrupted download never shows up in the
-dropdown; the partial file is deleted on failure or cancellation, and any
-leftover from an earlier crash is removed the next time the folder is opened.
-There is no checksum to verify against (HuggingFace does not publish per-file
-hashes), so Shept only checks the downloaded size against the published one.
+renamed once it is complete, so an unfinished download never shows up in the
+dropdown.
+
+An interrupted transfer resumes where it stopped: the next attempt asks the
+server for the bytes from the current size of the `.part` file, so a download
+that lost the connection at 1 GB continues from there instead of starting
+again, and cancelling keeps the partial file for the next try. A dropped
+connection, a timeout or an HTTP 5xx is retried three times with a growing
+wait; a 404, a full disk or a read-only folder fails at once, since another
+attempt cannot change the answer. The `.part` is renamed into place only once
+its size matches the published one, and one that is already that size is
+renamed without a new transfer; a file larger than the published model cannot
+be a prefix of the real one, so it is discarded and fetched again. Only a
+`.part` nothing has touched for a week counts as garbage and is removed when
+the folder is opened, so old leftovers do not accumulate. There is no checksum
+to verify against (HuggingFace does not publish per-file hashes), so Shept only
+checks the downloaded size against the published one.
 
 ### Adding your own folders
 
@@ -318,6 +338,9 @@ command.
      file** (plain text until you pick one).
 7. **Clear finished** removes completed, failed and cancelled rows from the
    queue without touching anything on disk.
+8. The menu at the right end of the header bar opens **About Shept**: the
+   version, the MIT licence, the copyright line and links to the project and
+   its issue tracker.
 
 ### Skipping silence
 
