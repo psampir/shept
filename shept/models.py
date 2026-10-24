@@ -114,6 +114,10 @@ CATALOG: tuple[ModelSpec, ...] = (
     ),
 )
 
+#: The catalogue indexed by filename, so a file on disk can be looked up by name
+#: even though `discover_models` accepts anything that looks like a model.
+SPECS_BY_FILENAME: dict[str, ModelSpec] = {spec.filename: spec for spec in CATALOG}
+
 #: The Silero voice-activity-detection model whisper.cpp loads for `--vad`.
 #: It is an auxiliary asset rather than a Whisper model, so it is deliberately
 #: kept out of `CATALOG`: it must never be offered as a transcription model or
@@ -306,12 +310,31 @@ def _discard(path: Path) -> None:
 
 def is_downloaded(spec: ModelSpec, dest_dir: Path) -> bool:
     """True when `dest_dir` already holds a complete copy of `spec`."""
-    path = Path(dest_dir) / spec.filename
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return False
-    return abs(size - spec.size_bytes) <= size_tolerance(spec.size_bytes)
+    return _matches_expected_size(spec, Path(dest_dir) / spec.filename)
+
+
+def spec_for_path(path: Path) -> ModelSpec | None:
+    """The catalogue entry for a model file, or None when Shept does not know it.
+
+    A file Shept does not publish is not wrong: the user may have fetched it
+    from somewhere else, so callers must treat None as "unknown", never as
+    "broken".
+    """
+    return SPECS_BY_FILENAME.get(Path(path).name)
+
+
+def is_complete_model_file(path: Path) -> bool | None:
+    """Whether a model file matches the size the catalogue publishes.
+
+    Returns None for a model Shept does not publish: `discover_models` accepts
+    any `ggml-*.bin`, and a file nobody published a size for cannot be judged.
+    The tolerance is the one `is_downloaded` uses, so the dropdown, the model
+    manager and the downloader all agree on what a complete file is.
+    """
+    spec = spec_for_path(path)
+    if spec is None:
+        return None
+    return _matches_expected_size(spec, Path(path))
 
 
 def is_complete_vad(path: Path) -> bool:

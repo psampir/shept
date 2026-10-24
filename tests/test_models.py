@@ -671,6 +671,68 @@ def test_is_downloaded_false_for_truncated_file(dest):
     assert is_downloaded(SPEC, dest) is False
 
 
+# ---------------------------------------------- spotting an incomplete model
+
+
+TINY = next(spec for spec in CATALOG if spec.name == "tiny")
+
+
+def _sparse_model(path: Path, size: int) -> Path:
+    """A file of `size` bytes that costs no disk: enough for a stat check."""
+    path.write_bytes(b"")
+    with path.open("rb+") as handle:
+        handle.truncate(size)
+    return path
+
+
+def test_spec_for_path_finds_the_catalogue_entry(tmp_path):
+    path = tmp_path / TINY.filename
+
+    assert models.spec_for_path(path) is TINY
+
+
+def test_spec_for_path_is_none_for_an_unpublished_model(tmp_path):
+    assert models.spec_for_path(tmp_path / "ggml-borrowed.bin") is None
+
+
+def test_is_complete_model_file_true_for_the_published_size(tmp_path):
+    path = _sparse_model(tmp_path / TINY.filename, TINY.size_bytes)
+
+    assert models.is_complete_model_file(path) is True
+
+
+def test_is_complete_model_file_tolerates_a_small_difference(tmp_path):
+    tolerance = models.size_tolerance(TINY.size_bytes)
+    path = _sparse_model(tmp_path / TINY.filename, TINY.size_bytes - tolerance)
+
+    assert models.is_complete_model_file(path) is True
+
+
+def test_is_complete_model_file_rejects_a_file_one_byte_beyond_tolerance(tmp_path):
+    tolerance = models.size_tolerance(TINY.size_bytes)
+    path = _sparse_model(tmp_path / TINY.filename, TINY.size_bytes - tolerance - 1)
+
+    assert models.is_complete_model_file(path) is False
+
+
+def test_is_complete_model_file_is_unknown_for_an_unpublished_model(tmp_path):
+    path = tmp_path / "ggml-borrowed.bin"
+    path.write_bytes(b"whatever")
+
+    assert models.is_complete_model_file(path) is None
+
+
+def test_is_complete_model_file_rejects_a_zero_byte_file(tmp_path):
+    path = tmp_path / TINY.filename
+    path.write_bytes(b"")
+
+    assert models.is_complete_model_file(path) is False
+
+
+def test_is_complete_model_file_rejects_a_missing_file(tmp_path):
+    assert models.is_complete_model_file(tmp_path / TINY.filename) is False
+
+
 def test_is_downloaded_ignores_part_files(dest):
     dest.mkdir()
     (dest / (SPEC.filename + ".part")).write_bytes(PAYLOAD)

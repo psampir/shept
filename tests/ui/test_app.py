@@ -28,7 +28,8 @@ from pathlib import Path
 
 from gi.repository import Adw, Gtk
 
-from shept.models import VAD_SPEC, VadState, human_size
+from shept.app import ModelDownloadDialog
+from shept.models import CATALOG, VAD_SPEC, VadState, human_size
 
 # --------------------------------------------------------------- widget helpers
 
@@ -185,6 +186,59 @@ def test_the_model_dropdown_lists_the_files_and_follows_the_selection(
 
     assert window._selected_model() == second
     assert _settings_payload(sandbox)["model"] == "aab-test"
+
+
+def test_a_truncated_model_is_labelled_and_explained_in_the_hint(make_window, sandbox):
+    """A short file stays in the dropdown, marked, and the hint names the sizes."""
+    truncated = sandbox.models / "ggml-tiny.bin"
+    truncated.write_bytes(b"not a real model")
+    window = make_window()
+
+    model = window.model_row.get_model()
+    names = [model.get_string(index) for index in range(model.get_n_items())]
+    assert names == ["tiny (incomplete)"]
+
+    window.model_row.set_selected(0)
+
+    assert window._hint_box.get_visible()
+    hint = window._hint_label.get_text()
+    assert "tiny" in hint
+    assert "should be" in hint
+    assert "Manage…" in hint
+    # Honest, not obstructive: the file is listed and Transcribe is not blocked.
+    assert window.model_path("tiny") == truncated
+
+
+def test_a_complete_model_hides_the_incomplete_hint(make_window, sandbox):
+    complete = sandbox.models / "ggml-tiny.bin"
+    with complete.open("wb") as handle:
+        handle.truncate(next(s.size_bytes for s in CATALOG if s.name == "tiny"))
+
+    window = make_window()
+
+    model = window.model_row.get_model()
+    names = [model.get_string(index) for index in range(model.get_n_items())]
+    assert names == ["tiny"]
+    assert window._hint_box.get_visible() is False
+    assert window._hint_label.get_text() == ""
+
+
+def test_the_model_manager_marks_an_installed_but_incomplete_row(make_window, sandbox):
+    with (sandbox.models / "ggml-tiny.bin").open("wb") as handle:
+        handle.truncate(1024)
+    window = make_window()
+    dialog = ModelDownloadDialog(window)
+    try:
+        row = dialog._entries["tiny"]["row"]
+        assert row.get_title() == "tiny (incomplete)"
+        box = dialog._entries["tiny"]["action"]
+        labels = [w.get_label() for w in _descendants(box) if isinstance(w, Gtk.Label)]
+        assert labels == ["Incomplete"]
+        assert "should be" in box.get_tooltip_text()
+        # A row that is not installed keeps its plain name and its button.
+        assert dialog._entries["small"]["row"].get_title() == "small"
+    finally:
+        dialog.destroy()
 
 
 # ------------------------------------------------------------------ 3. VAD row

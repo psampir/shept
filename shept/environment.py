@@ -15,7 +15,13 @@ from pathlib import Path
 # `languages` is deliberately dependency-free, so importing it here does not
 # create a cycle: nothing in that module knows about the environment.
 from shept.languages import language_by_code
-from shept.models import is_complete_vad
+from shept.models import (
+    human_size,
+    is_complete_model_file,
+    is_complete_vad,
+    size_tolerance,
+    spec_for_path,
+)
 
 MODEL_GLOB = "ggml-*.bin"
 #: whisper.cpp's VAD model is also a `ggml-*.bin` file, so it is matched
@@ -194,6 +200,50 @@ def model_search_origins(extra: Sequence[Path] = ()) -> list[tuple[Path, str]]:
 def model_display_name(path: Path) -> str:
     """Turn `ggml-large-v3-turbo.bin` into `large-v3-turbo`."""
     return path.name.removeprefix("ggml-").removesuffix(".bin")
+
+
+#: Appended to a model's name when its file is not the size Shept publishes.
+INCOMPLETE_SUFFIX = " (incomplete)"
+
+
+def is_incomplete_model(path: Path) -> bool:
+    """True for a catalogued model whose file is not the published size.
+
+    A model Shept does not publish is unknown, not broken, so it is never
+    flagged: only a file that is supposed to be, say, 1.62 GB and is not gets
+    called incomplete.
+    """
+    return is_complete_model_file(path) is False
+
+
+def model_choice_label(path: Path) -> str:
+    """The name the model dropdown shows: `tiny`, or `tiny (incomplete)`."""
+    name = model_display_name(path)
+    return f"{name}{INCOMPLETE_SUFFIX}" if is_incomplete_model(path) else name
+
+
+def incomplete_model_hint(path: Path) -> str:
+    """The hint under the model row for a truncated file, or "" when it is fine.
+
+    Silence for a model Shept does not publish, and for one of the right size:
+    the hint exists to explain a file that will fail in whisper-cli, not to
+    nag. It names both sizes, because "incomplete" alone leaves the user
+    guessing whether a re-download is worth it.
+    """
+    spec = spec_for_path(path)
+    if spec is None:
+        return ""
+    try:
+        size = Path(path).stat().st_size
+    except OSError:
+        return ""
+    if abs(size - spec.size_bytes) <= size_tolerance(spec.size_bytes):
+        return ""
+    return (
+        f"This file is {human_size(size)}, but {spec.name} should be "
+        f"{human_size(spec.size_bytes)}. It will probably fail to transcribe: "
+        'delete it in "Manage…" and download it again to replace it.'
+    )
 
 
 def abbreviate_home(path: Path) -> str:

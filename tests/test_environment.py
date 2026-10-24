@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from shept import environment
-from shept.models import VAD_SPEC
+from shept.models import CATALOG, VAD_SPEC
 
 
 @pytest.fixture
@@ -745,3 +745,59 @@ def test_vad_model_for_enabled_switch(enabled, expected):
 
 def test_vad_model_for_without_asset_is_none():
     assert environment.vad_model_for(True, None) is None
+
+
+# ------------------------------------------------------ flagging a bad model
+
+TINY = next(spec for spec in CATALOG if spec.name == "tiny")
+
+
+def _sparse_model(path: Path, size: int) -> Path:
+    path.write_bytes(b"")
+    with path.open("rb+") as handle:
+        handle.truncate(size)
+    return path
+
+
+def test_model_choice_label_names_a_complete_model_plainly(tmp_path):
+    path = _sparse_model(tmp_path / TINY.filename, TINY.size_bytes)
+
+    assert environment.model_choice_label(path) == "tiny"
+
+
+def test_model_choice_label_marks_a_truncated_model(tmp_path):
+    path = _sparse_model(tmp_path / TINY.filename, 1024)
+
+    assert environment.model_choice_label(path) == "tiny (incomplete)"
+
+
+def test_model_choice_label_leaves_an_unpublished_model_alone(tmp_path):
+    """Shept cannot know the size of a file it does not publish, so it says nothing."""
+    path = tmp_path / "ggml-borrowed.bin"
+    path.write_bytes(b"a few bytes")
+
+    assert environment.is_incomplete_model(path) is False
+    assert environment.model_choice_label(path) == "borrowed"
+
+
+def test_incomplete_model_hint_names_both_sizes(tmp_path):
+    path = _sparse_model(tmp_path / TINY.filename, 1024)
+
+    hint = environment.incomplete_model_hint(path)
+
+    assert "tiny" in hint
+    assert "should be" in hint
+    assert "Manage…" in hint
+
+
+def test_incomplete_model_hint_is_empty_for_a_complete_model(tmp_path):
+    path = _sparse_model(tmp_path / TINY.filename, TINY.size_bytes)
+
+    assert environment.incomplete_model_hint(path) == ""
+
+
+def test_incomplete_model_hint_is_empty_for_an_unpublished_model(tmp_path):
+    path = tmp_path / "ggml-borrowed.bin"
+    path.write_bytes(b"a few bytes")
+
+    assert environment.incomplete_model_hint(path) == ""

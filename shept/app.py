@@ -25,6 +25,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from shept import APP_ID, settings  # noqa: E402
 from shept.environment import (  # noqa: E402
+    INCOMPLETE_SUFFIX,
     MODELS_URL,
     ORIGIN_USER,
     RUN_TOOLS,
@@ -34,8 +35,11 @@ from shept.environment import (  # noqa: E402
     detect_backend,
     discover_models,
     find_vad_model,
+    incomplete_model_hint,
     install_hint,
+    is_incomplete_model,
     missing_tools,
+    model_choice_label,
     model_display_name,
     model_search_origins,
     model_search_paths,
@@ -504,6 +508,7 @@ class SheptWindow(Adw.ApplicationWindow):
             self.status.set_text(f"Could not save settings: {exc}")
 
     def _on_model_changed(self, *_args: object) -> None:
+        self._update_models_hint()
         self._save_settings()
 
     # ---------------------------------------------------------------- language
@@ -549,10 +554,11 @@ class SheptWindow(Adw.ApplicationWindow):
         self._save_settings()
 
     def _models_hint(self) -> Gtk.Widget:
-        """Explain where models were searched and how to get one."""
+        """Explain where models were searched, or why the selected one is bad."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         # The text is filled in by `_update_models_hint`, which runs whenever
-        # the folder list changes, so the hint cannot name stale directories.
+        # the folder list, the model list or the selection changes, so the hint
+        # cannot name stale directories or a model that is no longer selected.
         self._hint_label = Gtk.Label(xalign=0)
         self._hint_label.set_wrap(True)
         self._hint_label.add_css_class("dim-label")
@@ -563,15 +569,26 @@ class SheptWindow(Adw.ApplicationWindow):
         return box
 
     def _update_models_hint(self) -> None:
-        """Write the effective search paths into the "no models" hint."""
-        searched = "\n".join(f"  {path}" for path in self._effective_search_paths())
-        self._hint_label.set_text(
-            "No Whisper model found. Searched:\n"
-            f"{searched}\n"
-            'Use "Manage…" above to download one, or drop a ggml-*.bin '
-            "file into one of those directories."
-        )
-        self._hint_box.set_visible(not self._models)
+        """Write the "no models" paths or the incomplete-file warning, or hide.
+
+        One row serves both messages because they are mutually exclusive: with
+        nothing discovered there is no selection to complain about, and with a
+        selection the search path list is noise.
+        """
+        if not self._models:
+            searched = "\n".join(f"  {path}" for path in self._effective_search_paths())
+            self._hint_label.set_text(
+                "No Whisper model found. Searched:\n"
+                f"{searched}\n"
+                'Use "Manage…" above to download one, or drop a ggml-*.bin '
+                "file into one of those directories."
+            )
+            self._hint_box.set_visible(True)
+            return
+        model = self._selected_model()
+        text = incomplete_model_hint(model) if model is not None else ""
+        self._hint_label.set_text(text)
+        self._hint_box.set_visible(bool(text))
 
     def _effective_search_paths(self) -> list[Path]:
         """Every folder models are searched in, user folders included."""
@@ -606,7 +623,10 @@ class SheptWindow(Adw.ApplicationWindow):
         strings = Gtk.StringList()
         if self._models:
             for model in self._models:
-                strings.append(model_display_name(model))
+                # A truncated file stays listed, marked as such: hiding it
+                # would look like the model vanished, and a user who copied a
+                # half-finished download deserves to see what is wrong.
+                strings.append(model_choice_label(model))
         else:
             strings.append("(no models found)")
         self.model_row.set_model(strings)
@@ -1627,18 +1647,26 @@ class ModelDownloadDialog(Adw.Window):
 
         path = self._parent.model_path(spec.name)
         installed = is_downloaded(spec, self._dest) or path is not None
+        incomplete = path is not None and is_incomplete_model(path)
+        # Marked, never hidden: the file is on disk and the user may want to
+        # look at it, but calling it "Installed" would blame whisper-cli later.
+        row.set_title(f"{spec.name}{INCOMPLETE_SUFFIX}" if incomplete else spec.name)
         if installed:
             box = Gtk.Box(spacing=6)
-            check = Gtk.Image.new_from_icon_name("object-select-symbolic")
+            icon = "dialog-warning-symbolic" if incomplete else "object-select-symbolic"
+            check = Gtk.Image.new_from_icon_name(icon)
             box.append(check)
-            box.append(Gtk.Label(label="Installed"))
+            box.append(Gtk.Label(label="Incomplete" if incomplete else "Installed"))
             delete: Gtk.Widget | None = None
             if path is not None:
                 delete = self._delete_widget(path)
                 box.append(delete)
-            box.set_tooltip_text(
-                str(path) if path is not None else "This model is already available"
-            )
+            if incomplete and path is not None:
+                box.set_tooltip_text(f"{incomplete_model_hint(path)}\n\n{path}")
+            else:
+                box.set_tooltip_text(
+                    str(path) if path is not None else "This model is already available"
+                )
             row.add_suffix(box)
             entry["action"] = box
             entry["delete"] = delete
