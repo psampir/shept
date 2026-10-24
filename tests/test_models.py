@@ -10,6 +10,8 @@ import errno
 import io
 import os
 import socket
+import threading
+import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
@@ -47,9 +49,11 @@ class FakeResponse:
         payload: bytes = PAYLOAD,
         content_length: bool = True,
         fail_after: int | None = None,
+        status: int = 200,
     ) -> None:
         self._stream = io.BytesIO(payload)
         self.headers = {"Content-Length": str(len(payload))} if content_length else {}
+        self.status = status
         self.chunks_read = 0
         self._fail_after = fail_after
 
@@ -184,6 +188,8 @@ def test_download_dir_removes_stale_part_files(tmp_path, monkeypatch):
     directory.mkdir(parents=True)
     stale = directory / "ggml-small.bin.part"
     stale.write_bytes(b"half a model")
+    old = time.time() - models.STALE_PART_AGE - 60
+    os.utime(stale, (old, old))
     keep = directory / "ggml-small.bin"
     keep.write_bytes(b"complete")
 
@@ -193,12 +199,31 @@ def test_download_dir_removes_stale_part_files(tmp_path, monkeypatch):
     assert keep.exists()
 
 
+def test_download_dir_keeps_a_part_file_that_can_still_be_resumed(
+    tmp_path, monkeypatch
+):
+    """A fresh `.part` is half a download, not litter: the next run resumes it."""
+    data = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
+    directory = data / "shept" / "models"
+    directory.mkdir(parents=True)
+    fresh = directory / "ggml-large-v3-turbo.bin.part"
+    fresh.write_bytes(b"half a model")
+
+    download_dir()
+
+    assert fresh.read_bytes() == b"half a model"
+
+
 def test_download_dir_survives_a_part_file_it_cannot_remove(tmp_path, monkeypatch):
     data = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data))
     directory = data / "shept" / "models"
     directory.mkdir(parents=True)
-    (directory / "ggml-small.bin.part").write_bytes(b"half")
+    stale = directory / "ggml-small.bin.part"
+    stale.write_bytes(b"half")
+    old = time.time() - models.STALE_PART_AGE - 60
+    os.utime(stale, (old, old))
 
     def boom(self, *_args, **_kwargs):
         raise OSError("permission denied")
@@ -211,9 +236,41 @@ def test_download_dir_survives_a_part_file_it_cannot_remove(tmp_path, monkeypatc
 # -------------------------------------------------------------------- download
 
 
+@pytest.fixture
+def no_backoff(monkeypatch):
+    """Take the real waits out of the retry loop; the delays are tested apart."""
+    monkeypatch.setattr(models, "RETRY_DELAYS", (0.0, 0.0, 0.0))
+
+
+class FakeServer:
+    """A `urlopen` stand-in that answers `Range` requests like HuggingFace.
+
+    `reads` records the `Range` header of every request, so a test can prove
+    the transfer resumed instead of starting over.
+    """
+
+    def __init__(self, payload: bytes = PAYLOAD, honour_range: bool = True) -> None:
+        self.payload = payload
+        self.honour_range = honour_range
+        self.ranges: list[str | None] = []
+
+    def __call__(self, request, timeout=30) -> FakeResponse:
+        header = request.get_header("Range")
+        self.ranges.append(header)
+        offset = 0
+        if header and self.honour_range:
+            offset = int(header.removeprefix("bytes=").rstrip("-"))
+        body = self.payload[offset:]
+        # A 206 carries the length of the remainder, a 200 the length of the
+        # whole file; `download` must not confuse the two.
+        response = FakeResponse(body, status=206 if offset else 200)
+        response.headers = {"Content-Length": str(len(body))}
+        return response
+
+
 def test_download_writes_file_and_reports_progress(monkeypatch, dest):
     calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(models, "urlopen", lambda request, timeout=30: FakeResponse())
+    monkeypatch.setattr(models, "urlopen", FakeServer())
 
     path = download(
         SPEC,
@@ -267,30 +324,209 @@ def test_download_without_content_length_still_reports_bytes(monkeypatch, dest):
 
 
 def test_download_leaves_no_part_file_on_success(monkeypatch, dest):
-    monkeypatch.setattr(models, "urlopen", lambda request, timeout=30: FakeResponse())
+    monkeypatch.setattr(models, "urlopen", FakeServer())
 
     download(SPEC, dest, is_cancelled=lambda: False)
 
     assert sorted(p.name for p in dest.iterdir()) == [SPEC.filename]
 
 
-def test_download_removes_part_file_when_the_rename_fails(monkeypatch, dest):
-    monkeypatch.setattr(models, "urlopen", lambda request, timeout=30: FakeResponse())
+# ------------------------------------------------------------------- resuming
 
-    def failing_replace(_src, _dst):
-        raise OSError("Read-only file system")
 
-    monkeypatch.setattr(models.os, "replace", failing_replace)
+def test_download_resumes_from_the_part_file_with_a_206(monkeypatch, dest):
+    dest.mkdir()
+    part = dest / (SPEC.filename + ".part")
+    part.write_bytes(PAYLOAD[:300])
+    server = FakeServer()
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(models, "urlopen", server)
 
-    with pytest.raises(OSError, match="Read-only"):
+    path = download(
+        SPEC,
+        dest,
+        progress=lambda received, total: calls.append((received, total)),
+        is_cancelled=lambda: False,
+    )
+
+    assert server.ranges == ["bytes=300-"]
+    assert path.read_bytes() == PAYLOAD
+    # The bar continues from the resumed offset instead of jumping back to 0.
+    assert calls[0] == (300, len(PAYLOAD))
+    assert calls[-1][0] == len(PAYLOAD)
+    assert all(total == len(PAYLOAD) for _received, total in calls)
+
+
+def test_download_starts_over_when_the_server_ignores_the_range(monkeypatch, dest):
+    """A 200 answer means the whole body arrives: append, and the file doubles."""
+    dest.mkdir()
+    (dest / (SPEC.filename + ".part")).write_bytes(PAYLOAD[:300])
+    server = FakeServer(honour_range=False)
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(models, "urlopen", server)
+
+    path = download(
+        SPEC,
+        dest,
+        progress=lambda received, total: calls.append((received, total)),
+        is_cancelled=lambda: False,
+    )
+
+    assert server.ranges == ["bytes=300-"]
+    assert path.read_bytes() == PAYLOAD
+    assert calls[0] == (0, len(PAYLOAD))
+
+
+def test_download_renames_a_complete_part_file_without_the_network(monkeypatch, dest):
+    dest.mkdir()
+    (dest / (SPEC.filename + ".part")).write_bytes(PAYLOAD)
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("a complete .part must not be downloaded again")
+
+    monkeypatch.setattr(models, "urlopen", unexpected)
+
+    path = download(SPEC, dest, is_cancelled=lambda: False)
+
+    assert path.read_bytes() == PAYLOAD
+    assert sorted(p.name for p in dest.iterdir()) == [SPEC.filename]
+
+
+def test_download_discards_a_part_file_larger_than_the_published_size(
+    monkeypatch, dest
+):
+    dest.mkdir()
+    (dest / (SPEC.filename + ".part")).write_bytes(PAYLOAD + b"x" * 100)
+    server = FakeServer()
+    monkeypatch.setattr(models, "urlopen", server)
+
+    path = download(SPEC, dest, is_cancelled=lambda: False)
+
+    assert server.ranges == [None]
+    assert path.read_bytes() == PAYLOAD
+
+
+# -------------------------------------------------------------------- retrying
+
+
+def test_download_retries_after_a_url_error(monkeypatch, dest, no_backoff):
+    server = FakeServer()
+    calls = {"count": 0}
+
+    def flaky(request, timeout=30):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+        return server(request, timeout=timeout)
+
+    monkeypatch.setattr(models, "urlopen", flaky)
+
+    path = download(SPEC, dest, is_cancelled=lambda: False)
+
+    assert calls["count"] == 2
+    assert path.read_bytes() == PAYLOAD
+
+
+def test_download_retries_after_a_server_error(monkeypatch, dest, no_backoff):
+    server = FakeServer()
+    calls = {"count": 0}
+
+    def flaky(request, timeout=30):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise HTTPError(SPEC.url, 503, "Service Unavailable", {}, None)
+        return server(request, timeout=timeout)
+
+    monkeypatch.setattr(models, "urlopen", flaky)
+
+    assert download(SPEC, dest, is_cancelled=lambda: False).read_bytes() == PAYLOAD
+    assert calls["count"] == 2
+
+
+def test_download_retries_a_transfer_that_stops_short(monkeypatch, dest, no_backoff):
+    """A dropped connection is exactly the case resuming exists for."""
+    server = FakeServer()
+    truncated = {"sent": 0}
+
+    def dropping(request, timeout=30):
+        truncated["sent"] += 1
+        if truncated["sent"] == 1:
+            response = server(request, timeout=timeout)
+            response.headers = {"Content-Length": str(len(PAYLOAD) + 500)}
+            return response
+        return server(request, timeout=timeout)
+
+    monkeypatch.setattr(models, "urlopen", dropping)
+
+    path = download(SPEC, dest, is_cancelled=lambda: False)
+
+    assert truncated["sent"] == 2
+    assert path.read_bytes() == PAYLOAD
+
+
+def test_download_gives_up_after_three_retries(monkeypatch, dest, no_backoff):
+    calls = {"count": 0}
+
+    def failing(request, timeout=30):
+        calls["count"] += 1
+        raise URLError("connection refused")
+
+    monkeypatch.setattr(models, "urlopen", failing)
+
+    with pytest.raises(DownloadError, match="connection refused"):
         download(SPEC, dest, is_cancelled=lambda: False)
 
-    assert list(dest.iterdir()) == []
+    assert calls["count"] == 1 + len(models.RETRY_DELAYS)
+
+
+def test_retry_delays_back_off():
+    assert models.RETRY_DELAYS == (1.0, 2.0, 4.0)
+
+
+def test_download_never_retries_a_404(monkeypatch, dest, no_backoff):
+    calls = {"count": 0}
+
+    def missing(request, timeout=30):
+        calls["count"] += 1
+        raise HTTPError(SPEC.url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(models, "urlopen", missing)
+
+    with pytest.raises(DownloadError, match="404"):
+        download(SPEC, dest, is_cancelled=lambda: False)
+
+    assert calls["count"] == 1
+
+
+def test_download_cancel_during_the_backoff_wait_is_quick(monkeypatch, dest):
+    """Cancel must not wait out a 5 s backoff before the thread notices."""
+    monkeypatch.setattr(models, "RETRY_DELAYS", (5.0,))
+    cancel = threading.Event()
+    calls = {"count": 0}
+
+    def failing(request, timeout=30):
+        calls["count"] += 1
+        # The user hits Cancel while the retry is being scheduled.
+        threading.Timer(0.15, cancel.set).start()
+        raise URLError("connection refused")
+
+    monkeypatch.setattr(models, "urlopen", failing)
+
+    start = time.monotonic()
+    with pytest.raises(DownloadCancelled):
+        download(SPEC, dest, is_cancelled=cancel.is_set)
+    elapsed = time.monotonic() - start
+
+    assert calls["count"] == 1
+    assert elapsed < 1.5, f"cancelling waited {elapsed:.2f}s for the backoff"
+
+
+# ------------------------------------------------------------ other failures
 
 
 def test_download_creates_destination_directory(monkeypatch, tmp_path):
     nested = tmp_path / "does" / "not" / "exist"
-    monkeypatch.setattr(models, "urlopen", lambda request, timeout=30: FakeResponse())
+    monkeypatch.setattr(models, "urlopen", FakeServer())
 
     path = download(SPEC, nested, is_cancelled=lambda: False)
 
@@ -298,19 +534,22 @@ def test_download_creates_destination_directory(monkeypatch, tmp_path):
     assert path.exists()
 
 
-def test_download_removes_part_file_on_network_error(monkeypatch, dest):
+def test_download_reports_a_local_error_without_retrying(monkeypatch, dest):
+    calls = {"count": 0}
+
     def failing(request, timeout=30):
-        raise OSError("network is unreachable")
+        calls["count"] += 1
+        raise OSError(errno.ENOSPC, "No space left on device")
 
     monkeypatch.setattr(models, "urlopen", failing)
 
-    with pytest.raises(DownloadError, match="network is unreachable"):
+    with pytest.raises(DownloadError, match="No space left on device"):
         download(SPEC, dest, is_cancelled=lambda: False)
 
-    assert list(dest.iterdir()) == []
+    assert calls["count"] == 1
 
 
-def test_download_removes_part_file_on_mid_stream_error(monkeypatch, dest):
+def test_download_keeps_the_part_file_on_a_mid_stream_error(monkeypatch, dest):
     monkeypatch.setattr(
         models,
         "urlopen",
@@ -320,24 +559,40 @@ def test_download_removes_part_file_on_mid_stream_error(monkeypatch, dest):
     with pytest.raises(DownloadError):
         download(SPEC, dest, is_cancelled=lambda: False)
 
-    assert list(dest.iterdir()) == []
+    part = dest / (SPEC.filename + ".part")
+    assert part.stat().st_size > 0
+    assert not (dest / SPEC.filename).exists()
 
 
-def test_download_detects_truncated_transfer(monkeypatch, dest):
-    def fake(request, timeout=30):
-        response = FakeResponse()
-        response.headers = {"Content-Length": str(len(PAYLOAD) + 1000)}
-        return response
+def test_download_refuses_to_publish_a_file_that_is_short(monkeypatch, dest):
+    """No Content-Length to compare against, so only the size check can tell."""
+    short = PAYLOAD[:100]
+    monkeypatch.setattr(models, "urlopen", FakeServer(payload=short))
 
-    monkeypatch.setattr(models, "urlopen", fake)
-
-    with pytest.raises(DownloadError, match="truncated"):
+    with pytest.raises(DownloadError, match="incomplete"):
         download(SPEC, dest, is_cancelled=lambda: False)
 
-    assert list(dest.iterdir()) == []
+    assert not (dest / SPEC.filename).exists()
+    assert (dest / (SPEC.filename + ".part")).read_bytes() == short
 
 
-def test_download_cancel_stops_early_and_leaves_no_files(monkeypatch, dest):
+def test_download_removes_a_part_file_when_the_rename_fails(monkeypatch, dest):
+    monkeypatch.setattr(models, "urlopen", FakeServer())
+
+    def failing_replace(_src, _dst):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(models.os, "replace", failing_replace)
+
+    with pytest.raises(OSError, match="Read-only"):
+        download(SPEC, dest, is_cancelled=lambda: False)
+
+    # The transfer was fine, only the rename was not: the bytes are kept, and
+    # the next attempt renames them without asking the network again.
+    assert (dest / (SPEC.filename + ".part")).read_bytes() == PAYLOAD
+
+
+def test_download_cancel_stops_early_and_keeps_the_part_file(monkeypatch, dest):
     response = FakeResponse()
     monkeypatch.setattr(models, "urlopen", lambda request, timeout=30: response)
     checks = {"count": 0}
@@ -350,8 +605,10 @@ def test_download_cancel_stops_early_and_leaves_no_files(monkeypatch, dest):
     with pytest.raises(DownloadCancelled):
         download(SPEC, dest, is_cancelled=cancelled)
 
-    assert list(dest.iterdir()) == []
     assert response.chunks_read < 6
+    part = dest / (SPEC.filename + ".part")
+    assert 0 < part.stat().st_size < len(PAYLOAD)
+    assert not (dest / SPEC.filename).exists()
 
 
 def test_download_cancelled_before_starting_never_touches_the_network(
@@ -369,7 +626,7 @@ def test_download_cancelled_before_starting_never_touches_the_network(
 
 
 def test_download_without_callbacks_works(monkeypatch, dest):
-    monkeypatch.setattr(models, "urlopen", lambda request, timeout=30: FakeResponse())
+    monkeypatch.setattr(models, "urlopen", FakeServer())
 
     assert download(SPEC, dest).read_bytes() == PAYLOAD
 

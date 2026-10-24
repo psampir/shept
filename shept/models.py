@@ -8,19 +8,35 @@ library is used, so importing it adds no dependency to the app's start-up path.
 from __future__ import annotations
 
 import errno
+import http.client
 import os
 import socket
 import stat
+import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 CHUNK_SIZE = 256 * 1024
 USER_AGENT = "shept/0.1 (+https://github.com/psampir/shept)"
+
+#: Waits before each retry of a transfer that failed in a recoverable way, in
+#: seconds. Four attempts in total: the first one plus one per entry. Only
+#: failures another attempt can get past are retried; a 404 never is.
+RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
+
+#: How long an untouched `.part` file is kept before `download_dir()` treats it
+#: as garbage. Younger ones are a download a user can still resume, so deleting
+#: them on every start (as older versions did) would throw away gigabytes.
+STALE_PART_AGE = 7 * 24 * 60 * 60
+
+#: Longest single sleep inside a backoff wait, so cancelling during one takes
+#: effect within this many seconds instead of after the whole delay.
+BACKOFF_SLICE = 0.1
 
 #: Cap on the size difference tolerated when deciding whether a file is
 #: complete (1% of the file, never more than this). HuggingFace publishes no
@@ -247,8 +263,9 @@ def download_dir() -> Path:
     `$XDG_DATA_HOME/shept/models` is the first place `environment` searches for
     models and the only model directory that is writable inside the Flatpak
     sandbox, so downloads always land there rather than next to an existing
-    system-wide model. Leftover `.part` files from an interrupted run are
-    removed here, so they cannot accumulate forever.
+    system-wide model. `.part` files older than `STALE_PART_AGE` are removed
+    here, so abandoned downloads cannot pile up forever; younger ones are kept
+    because `download()` resumes them.
     """
     data_home = os.environ.get("XDG_DATA_HOME", "").strip()
     base = Path(data_home) if data_home else Path.home() / ".local" / "share"
@@ -259,13 +276,24 @@ def download_dir() -> Path:
 
 
 def _remove_stale_parts(directory: Path) -> None:
-    """Delete half-written downloads; nothing ever reads a `.part` file back."""
+    """Delete `.part` files nothing has touched for `STALE_PART_AGE`.
+
+    A fresh `.part` is the first half of a download `download()` will resume, so
+    it must survive a restart. Only one old enough that the user has clearly
+    given up on it is collected.
+    """
     try:
         parts = list(directory.glob("*.part"))
     except OSError:
         return
+    now = time.time()
     for part in parts:
-        _discard(part)
+        try:
+            age = now - part.stat().st_mtime
+        except OSError:
+            continue
+        if age > STALE_PART_AGE:
+            _discard(part)
 
 
 def _discard(path: Path) -> None:
@@ -386,6 +414,144 @@ def pick_model_after_delete(models: Sequence[str], deleted: str) -> str | None:
     return remaining[0]
 
 
+class _RecoverableFailure(Exception):
+    """A transfer failed in a way another attempt could get past."""
+
+    def __init__(self, message: str, cause: BaseException | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+def _status_code(response: object) -> int:
+    """The HTTP status of a `urlopen` response, or 200 when it does not say."""
+    status = getattr(response, "status", None)
+    if isinstance(status, int):
+        return status
+    getcode = getattr(response, "getcode", None)
+    if callable(getcode):
+        try:
+            return int(getcode() or 200)
+        except (TypeError, ValueError):
+            return 200
+    return 200
+
+
+def _matches_expected_size(spec: ModelSpec, path: Path) -> bool:
+    """True when `path` is as big as the catalogue says `spec` is."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    return abs(size - spec.size_bytes) <= size_tolerance(spec.size_bytes)
+
+
+def _backoff_sleep(seconds: float, cancelled: Callable[[], bool]) -> bool:
+    """Wait `seconds`, checking `cancelled` often; False when it became true.
+
+    The wait is sliced so Cancel takes effect immediately instead of after the
+    whole delay: a 4 s backoff that ignores the button reads as a hung app.
+    """
+    deadline = time.monotonic() + seconds
+    while True:
+        if cancelled():
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(BACKOFF_SLICE, remaining))
+
+
+def _transfer_once(
+    spec: ModelSpec,
+    part_path: Path,
+    progress: Callable[[int, int], None] | None,
+    raise_if_cancelled: Callable[[], None],
+) -> None:
+    """One attempt at the transfer, appended to whatever `part_path` holds.
+
+    A `Range` request resumes from the current size of the `.part` file. `206
+    Partial Content` appends, while `200 OK` means the server ignored the range
+    (or there was nothing to resume), so the file is truncated and written from
+    the start rather than silently doubling its contents.
+    """
+    try:
+        offset = part_path.stat().st_size
+    except OSError:
+        offset = 0
+    if offset >= spec.size_bytes:
+        # Not a prefix of the published file, so it cannot be resumed.
+        _discard(part_path)
+        offset = 0
+
+    headers = {"User-Agent": USER_AGENT}
+    if offset:
+        headers["Range"] = f"bytes={offset}-"
+    request = Request(spec.url, headers=headers)
+    try:
+        response = urlopen(request, timeout=30)  # noqa: S310  # https URL
+    except HTTPError as exc:
+        if exc.code >= 500:
+            raise _RecoverableFailure(
+                f"the server returned HTTP {exc.code}", exc
+            ) from exc
+        raise
+    except URLError as exc:
+        raise _RecoverableFailure(
+            f"could not reach the server ({exc.reason})", exc
+        ) from exc
+
+    try:
+        with response:
+            status = _status_code(response)
+            length = int(response.headers.get("Content-Length") or 0)
+            if offset and status == 206:
+                received = offset
+                total = offset + length if length else 0
+                mode = "ab"
+            else:
+                received = 0
+                total = length
+                mode = "wb"
+            if progress is not None:
+                progress(received, total)
+            with part_path.open(mode) as handle:
+                while True:
+                    raise_if_cancelled()
+                    chunk = response.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    received += len(chunk)
+                    if progress is not None:
+                        progress(received, total)
+            if total and received != total:
+                raise _RecoverableFailure(
+                    f"the transfer stopped at {received} of {total} bytes"
+                )
+    except TimeoutError as exc:
+        raise _RecoverableFailure("the connection timed out", exc) from exc
+    except http.client.HTTPException as exc:
+        # A dropped connection usually surfaces as `IncompleteRead`, which is
+        # neither an `OSError` nor a `URLError`.
+        raise _RecoverableFailure(
+            f"the connection dropped ({type(exc).__name__})", exc
+        ) from exc
+
+
+def _verify_size(spec: ModelSpec, part_path: Path) -> None:
+    """Refuse to publish a file that is not the size the catalogue promises."""
+    try:
+        size = part_path.stat().st_size
+    except OSError as exc:
+        raise DownloadError(f"Download of {spec.name} produced no file: {exc}") from exc
+    if abs(size - spec.size_bytes) > size_tolerance(spec.size_bytes):
+        raise DownloadError(
+            f"Download of {spec.name} is incomplete: {size} of "
+            f"{spec.size_bytes} bytes arrived. The partial file was kept, so "
+            "the next attempt resumes it."
+        )
+
+
 def download(
     spec: ModelSpec,
     dest_dir: Path,
@@ -396,9 +562,16 @@ def download(
 
     The transfer goes to `<filename>.part` and is only renamed to its final
     name once it completed, so an interrupted run never leaves a truncated
-    `.bin` behind for `discover_models()` to pick up. `progress` is called with
-    `(received_bytes, total_bytes)`, where `total_bytes` is 0 when the server
-    sends no `Content-Length`.
+    `.bin` behind for `discover_models()` to pick up. The `.part` file survives
+    a failure, and the next attempt asks the server for the bytes from its size
+    on, which is what makes a 1.6 GB model finish on a flaky connection.
+
+    `progress` is called with `(received_bytes, total_bytes)`, where
+    `received_bytes` counts from the resume offset and `total_bytes` is 0 when
+    the server sends no `Content-Length`. Recoverable failures (`URLError`,
+    timeouts, HTTP 5xx) are retried up to `len(RETRY_DELAYS)` times; a 4xx is
+    final, and so is any local error such as a full disk. Cancelling keeps the
+    `.part` too, so stopping and starting again continues where it stopped.
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -408,48 +581,45 @@ def download(
     def cancelled() -> bool:
         return is_cancelled is not None and is_cancelled()
 
-    if cancelled():
-        raise DownloadCancelled(f"Download of {spec.name} was cancelled.")
+    def raise_if_cancelled() -> None:
+        if cancelled():
+            raise DownloadCancelled(f"Download of {spec.name} was cancelled.")
 
-    request = Request(spec.url, headers={"User-Agent": USER_AGENT})
-    received = 0
-    try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310  # https URL
-            total = int(response.headers.get("Content-Length") or 0)
-            if progress is not None:
-                progress(0, total)
-            with part_path.open("wb") as handle:
-                while True:
-                    if cancelled():
-                        raise DownloadCancelled(
-                            f"Download of {spec.name} was cancelled."
-                        )
-                    chunk = response.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    handle.write(chunk)
-                    received += len(chunk)
-                    if progress is not None:
-                        progress(received, total)
-            if total and received != total:
-                raise DownloadError(
-                    f"Download of {spec.name} was truncated "
-                    f"({received} of {total} bytes)."
-                )
-    except DownloadCancelled:
-        _discard(part_path)
-        raise
-    except OSError as exc:
-        _discard(part_path)
-        raise DownloadError(f"Could not download {spec.name}: {exc}") from exc
-    except BaseException:
-        _discard(part_path)
-        raise
+    raise_if_cancelled()
 
-    try:
+    # An earlier run may have finished the transfer and then failed to rename
+    # it; downloading those bytes a second time would be pure waste.
+    if _matches_expected_size(spec, part_path):
         os.replace(part_path, final_path)
-    except OSError:
-        # A failed rename must not leave the half-written file behind either.
-        _discard(part_path)
-        raise
+        return final_path
+
+    attempt = 0
+    while True:
+        try:
+            _transfer_once(spec, part_path, progress, raise_if_cancelled)
+        except _RecoverableFailure as exc:
+            if attempt >= len(RETRY_DELAYS):
+                raise DownloadError(
+                    f"Could not download {spec.name}: {exc}. The partial file "
+                    "was kept, so the next attempt resumes it."
+                ) from exc.cause
+            if not _backoff_sleep(RETRY_DELAYS[attempt], cancelled):
+                raise DownloadCancelled(
+                    f"Download of {spec.name} was cancelled."
+                ) from exc
+            attempt += 1
+            raise_if_cancelled()
+            continue
+        except DownloadCancelled:
+            raise
+        except OSError as exc:
+            # A local failure (a full disk, a read-only folder) or a 4xx: no
+            # number of retries can change the answer.
+            raise DownloadError(f"Could not download {spec.name}: {exc}") from exc
+        break
+
+    _verify_size(spec, part_path)
+    # A failed rename keeps the complete `.part`; the check at the top of the
+    # next attempt turns it into the final file without a transfer.
+    os.replace(part_path, final_path)
     return final_path
