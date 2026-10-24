@@ -26,11 +26,14 @@ from shept.transcribe import (
     format_srt,
     format_txt,
     format_vtt,
+    join_pending_stops,
     ms_to_ts,
     parse_progress_line,
     parse_segment,
     probe_duration,
     read_tail,
+    send_stop,
+    stop_in_background,
     stop_process,
     summarize_error,
     ts_to_ms,
@@ -655,6 +658,111 @@ def test_stop_process_does_not_wait_long_when_the_child_ignores_sigterm():
     stop_process(proc, timeout=0.2)
 
     assert time.monotonic() - start < 5
+
+
+def _spawn_term_ignoring_shell(directory: Path) -> subprocess.Popen:
+    """A `/bin/sh` child that traps SIGTERM and sleeps, with a ready marker.
+
+    The marker is what makes the test race-free: SIGTERM must arrive only once
+    the trap is installed, otherwise the child would die from the default
+    action and prove nothing.
+    """
+    script = directory / "stubborn.sh"
+    ready = directory / "stubborn-ready"
+    script.write_text(
+        f"#!/bin/sh\ntrap '' TERM\n: > '{ready}'\nwhile :; do sleep 0.05; done\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    proc = subprocess.Popen([str(script)])
+    deadline = time.monotonic() + 5
+    while not ready.exists():
+        if time.monotonic() > deadline or proc.poll() is not None:
+            proc.kill()
+            proc.wait()
+            raise AssertionError("the stubborn child never installed its handler")
+        time.sleep(0.01)
+    return proc
+
+
+def test_send_stop_only_signals_and_returns_at_once(tmp_path):
+    """`send_stop` must not wait: that is what froze the main loop."""
+    proc = _spawn_term_ignoring_shell(tmp_path)
+    try:
+        start = time.monotonic()
+        sent = send_stop(proc)
+        elapsed = time.monotonic() - start
+
+        assert sent is True
+        assert elapsed < 0.2, f"send_stop blocked for {elapsed:.2f}s"
+        # SIGTERM alone cannot end this child: no escalation happened yet.
+        assert proc.poll() is None
+    finally:
+        stop_process(proc, timeout=0.1)
+
+
+def test_send_stop_is_a_no_op_for_a_finished_child():
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+
+    assert send_stop(proc) is False
+
+
+def test_send_stop_terminates_a_child_that_honours_sigterm():
+    proc = subprocess.Popen(["sleep", "30"])
+
+    assert send_stop(proc) is True
+    assert proc.wait(timeout=5) == -signal.SIGTERM
+
+
+def test_stop_in_background_kills_a_child_that_ignores_sigterm(tmp_path):
+    """The escalator waits on its own thread, then sends SIGKILL."""
+    proc = _spawn_term_ignoring_shell(tmp_path)
+    try:
+        start = time.monotonic()
+        assert send_stop(proc) is True
+        thread = stop_in_background(proc, timeout=0.2)
+        elapsed = time.monotonic() - start
+
+        assert thread is not None
+        assert elapsed < 0.2, f"stop_in_background blocked for {elapsed:.2f}s"
+        # The grace period has not passed yet, so the child is still alive.
+        assert proc.poll() is None
+
+        thread.join(timeout=5)
+
+        assert not thread.is_alive()
+        assert proc.wait(timeout=5) == -signal.SIGKILL
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_stop_in_background_returns_none_without_a_running_child():
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+
+    assert stop_in_background(proc) is None
+    assert stop_in_background(None) is None
+
+
+def test_join_pending_stops_waits_for_the_escalator(tmp_path):
+    """The atexit hook is what keeps a daemon escalator from orphaning a child."""
+    proc = _spawn_term_ignoring_shell(tmp_path)
+    try:
+        send_stop(proc)
+        thread = stop_in_background(proc, timeout=0.2)
+        assert thread is not None
+
+        join_pending_stops()
+
+        assert not thread.is_alive()
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def test_build_whisper_cmd_without_vad_is_unchanged():

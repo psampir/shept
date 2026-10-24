@@ -7,7 +7,8 @@ logic underneath it:
 * the language rows were `Adw.ActionRow`s appended straight to a
   `Gtk.ListBox`, so they rendered but were never real rows: clicks did
   nothing while Enter still worked;
-* the queue/VAD/model rows only exist as widgets.
+* the queue/VAD/model rows only exist as widgets;
+* Cancel ran SIGTERM+wait+SIGKILL on the main thread and froze the window.
 
 The assertions deliberately go through the widgets (a row's own activation
 path, a star's `set_active`, a dropdown's `set_selected`), never through the
@@ -19,6 +20,11 @@ from __future__ import annotations
 
 import json
 import shutil
+import signal
+import subprocess
+import threading
+import time
+from pathlib import Path
 
 from gi.repository import Adw, Gtk
 
@@ -295,3 +301,97 @@ def test_adding_two_files_creates_two_rows_and_unblocks_transcribe(
     assert [row.get_title() for row in rows] == ["first.mp3", "second.mp3"]
     assert window._transcribe_blocker() == ""
     assert window.run_btn.get_sensitive() is True
+
+
+# ------------------------------------------------------- 6. cancel stays instant
+
+
+def _spawn_term_ignoring_shell(directory: Path) -> subprocess.Popen[str]:
+    """A `/bin/sh` child that ignores SIGTERM, with a ready marker."""
+    script = directory / "stubborn.sh"
+    ready = directory / "stubborn-ready"
+    script.write_text(
+        f"#!/bin/sh\ntrap '' TERM\n: > '{ready}'\nwhile :; do sleep 0.05; done\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    proc = subprocess.Popen([str(script)])
+    deadline = time.monotonic() + 5
+    while not ready.exists():
+        if time.monotonic() > deadline or proc.poll() is not None:
+            proc.kill()
+            raise AssertionError("the stubborn child never installed its handler")
+        time.sleep(0.01)
+    return proc
+
+
+def test_cancel_returns_at_once_and_the_escalator_kills_the_child(make_window, sandbox):
+    """Cancel used to block the main loop for the child's whole grace period."""
+    job_file = sandbox.root / "talk.mp3"
+    job_file.write_bytes(b"audio")
+    window = make_window()
+    window.add_files([job_file])
+    job = window.queue.jobs[0]
+    window.queue.mark_running(job)
+    window._update_run_state()
+
+    proc = _spawn_term_ignoring_shell(sandbox.root)
+    window._proc = proc
+    try:
+        start = time.monotonic()
+        window._cancel_batch()
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 0.2, f"Cancel blocked the main loop for {elapsed:.2f}s"
+        assert window.status.get_text() == "Cancelling…"
+        assert window._cancel.is_set()
+        assert not window.cancel_btn.get_sensitive()
+
+        # SIGTERM was sent, the child ignored it, and the escalator is now
+        # responsible: the window must be back on the main loop while it waits.
+        assert window._stopper is not None
+        # Cancel followed by close lands here twice; one escalator is enough.
+        stopper = window._stopper
+        window._cancel_batch()
+        assert window._stopper is stopper
+        assert proc.wait(timeout=5) == -signal.SIGKILL
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_close_request_does_not_wait_for_the_worker(make_window, sandbox):
+    """Closing must not join the worker for the child's whole grace period.
+
+    The two seconds the old close handler spent in `worker.join()` are what
+    made the window look hung on quit; the escalator thread finishes the kill,
+    so close only gives the worker one short moment to unwind.
+    """
+    job_file = sandbox.root / "talk.mp3"
+    job_file.write_bytes(b"audio")
+    window = make_window()
+    window.add_files([job_file])
+    job = window.queue.jobs[0]
+    window.queue.mark_running(job)
+    window._update_run_state()
+
+    proc = _spawn_term_ignoring_shell(sandbox.root)
+    window._proc = proc
+    worker = threading.Thread(target=time.sleep, args=(1.5,), daemon=True)
+    window._worker = worker
+    worker.start()
+    try:
+        start = time.monotonic()
+        assert window.do_close_request() is False
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 0.2, f"close blocked for {elapsed:.2f}s"
+        assert window._closing is True
+        assert window.status.get_text() == "Cancelling…"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        worker.join(timeout=5)

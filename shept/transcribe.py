@@ -6,10 +6,12 @@ that the parsing and every output format can be tested without PyGObject.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
 import subprocess
+import threading
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -144,23 +146,41 @@ def build_whisper_cmd(
     return cmd
 
 
-def stop_process(
+def send_stop(proc: subprocess.Popen | None) -> bool:
+    """Send SIGTERM to `proc` and return immediately; True when it was sent.
+
+    This is the only part of stopping a child that is cheap enough for the GTK
+    main thread: it asks the child to leave and returns. The grace period and
+    the SIGKILL that may follow live in `escalate_stop` / `stop_in_background`,
+    which must never run on that thread.
+
+    A process that already exited, or no process at all, is a no-op.
+    """
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        proc.terminate()
+    except OSError:
+        # The child died between poll() and terminate(); nothing left to stop.
+        return False
+    return True
+
+
+def escalate_stop(
     proc: subprocess.Popen | None,
     timeout: float = STOP_TIMEOUT,
 ) -> None:
-    """Stop `proc`: SIGTERM, then SIGKILL when it is still alive after `timeout`.
+    """Wait up to `timeout` for `proc` to exit, then SIGKILL it.
 
-    Used by both Cancel and the window's close handler. Closing the window
-    while a job runs used to leave whisper-cli (or ffmpeg) behind as an orphan
-    still using the GPU; a cancelled job stopped its process only from the
-    worker thread, which is a daemon and dies with the interpreter. Waiting
-    here is bounded, so a close can never hang the main loop for long.
+    Blocks, so it belongs on a worker thread: the UI calls `send_stop` and
+    hands the escalation to `stop_in_background`. When the child honoured the
+    SIGTERM this returns as soon as it is gone, so a well-behaved process
+    costs a single `wait`.
 
     A process that already exited, or no process at all, is a no-op.
     """
     if proc is None or proc.poll() is not None:
         return
-    proc.terminate()
     try:
         proc.wait(timeout=timeout)
         return
@@ -171,6 +191,74 @@ def stop_process(
         proc.wait(timeout=KILL_TIMEOUT)
     except subprocess.TimeoutExpired:
         pass
+
+
+def stop_process(
+    proc: subprocess.Popen | None,
+    timeout: float = STOP_TIMEOUT,
+) -> None:
+    """Stop `proc` synchronously: SIGTERM, then SIGKILL after `timeout`.
+
+    Kept for the callers that already run on a worker thread (the job worker,
+    the probe timeout) and for compatibility. The GTK main thread must not use
+    this: blocking it for the grace period is what made Cancel freeze the
+    window, so Cancel and close use `send_stop` plus `stop_in_background`.
+    """
+    send_stop(proc)
+    escalate_stop(proc, timeout)
+
+
+#: Escalator threads that have not finished yet, so they can be joined at
+#: interpreter exit. They are daemon threads: without this join an app closed
+#: while a child ignores SIGTERM would exit before the SIGKILL and leave that
+#: child running as an orphan, which is the bug the close handler exists for.
+_PENDING_STOPS: set[threading.Thread] = set()
+_PENDING_STOPS_LOCK = threading.Lock()
+
+
+def stop_in_background(
+    proc: subprocess.Popen | None,
+    timeout: float = STOP_TIMEOUT,
+) -> threading.Thread | None:
+    """Escalate a SIGTERM already sent by `send_stop` on a worker thread.
+
+    Returns the thread, or None when there was nothing to escalate. The
+    caller sends the signal first (`send_stop`) so the child starts shutting
+    down before the thread is even created; this function only owns the grace
+    period and the SIGKILL. The thread never touches GTK.
+    """
+    if proc is None or proc.poll() is not None:
+        return None
+    thread = threading.Thread(
+        target=_escalate_and_forget,
+        args=(proc, timeout),
+        name="shept-stop",
+        daemon=True,
+    )
+    with _PENDING_STOPS_LOCK:
+        _PENDING_STOPS.add(thread)
+    thread.start()
+    return thread
+
+
+def _escalate_and_forget(proc: subprocess.Popen, timeout: float) -> None:
+    """Body of the escalator thread: escalate, then stop being tracked."""
+    try:
+        escalate_stop(proc, timeout)
+    finally:
+        with _PENDING_STOPS_LOCK:
+            _PENDING_STOPS.discard(threading.current_thread())
+
+
+def join_pending_stops() -> None:
+    """Wait for every escalator thread, bounded by its own grace periods."""
+    with _PENDING_STOPS_LOCK:
+        pending = list(_PENDING_STOPS)
+    for thread in pending:
+        thread.join(timeout=STOP_TIMEOUT + KILL_TIMEOUT)
+
+
+atexit.register(join_pending_stops)
 
 
 def read_tail(path: Path, limit: int = STDERR_TAIL_BYTES) -> str:

@@ -81,14 +81,18 @@ from shept.transcribe import (  # noqa: E402
     parse_segment,
     probe_duration,
     read_tail,
+    send_stop,
+    stop_in_background,
     stop_process,
     summarize_error,
     write_text_atomic,
 )
 
-#: How long the close handler waits for the worker to unwind after the child
-#: was stopped, so its temporary directory is removed before the process exits.
-WORKER_JOIN_TIMEOUT = 2.0
+#: How long close-request lets the worker unwind after its child was signalled.
+#: It used to be two seconds, which is exactly how long the window appeared to
+#: hang when a file ignored SIGTERM. The escalator thread finishes the kill,
+#: and `TemporaryDirectory`'s finalizer removes whatever the worker left behind.
+CLOSE_JOIN_TIMEOUT = 0.1
 
 #: The extensions offered when adding files; the README lists the same set.
 MEDIA_EXTENSIONS = (
@@ -184,9 +188,15 @@ class SheptWindow(Adw.ApplicationWindow):
         #: True once close-request ran. From then on the idle callbacks stay
         #: away from the widgets, which are already being torn down.
         self._closing = False
-        #: The worker of the running job, joined on close so that its
-        #: `TemporaryDirectory` is removed before the process exits.
+        #: The worker of the running job. Close-request gives it a moment to
+        #: unwind, but never waits for the child's whole grace period.
         self._worker: threading.Thread | None = None
+        #: The thread that SIGKILLs the current child if it ignores SIGTERM.
+        #: It is the only waiter, so neither Cancel nor close can block on it.
+        self._stopper: threading.Thread | None = None
+        #: The child that stopper is escalating, so a second cancel for the
+        #: same child (Cancel then close) does not start a second thread.
+        self._stopper_proc: subprocess.Popen[str] | None = None
         self.queue = Queue()
         self._selected: Job | None = None
         #: The job whose segments the text view is currently showing. Segments
@@ -726,16 +736,20 @@ class SheptWindow(Adw.ApplicationWindow):
 
         Returning False lets the close continue. Without this the worker
         thread (a daemon) dies with the interpreter while whisper-cli or
-        ffmpeg keeps running as an orphan, still loading the GPU. The waits
-        here are bounded so closing stays responsive.
+        ffmpeg keeps running as an orphan, still loading the GPU.
+
+        `_cancel_batch` only sends SIGTERM; the escalator thread waits for the
+        grace period and kills the child, and it is joined at interpreter exit
+        (`transcribe.join_pending_stops`). So closing must not wait for it:
+        the worker gets one short moment to unwind, nothing more, and the job's
+        `TemporaryDirectory` is removed by the worker or, if the interpreter
+        is already going down, by its own finalizer.
         """
         self._closing = True
         self._cancel_batch()
         worker = self._worker
         if worker is not None and worker is not threading.current_thread():
-            worker.join(timeout=WORKER_JOIN_TIMEOUT)
-            # The worker removes the job's temporary directory on the way out,
-            # which is the same cleanup a normal finish does.
+            worker.join(timeout=CLOSE_JOIN_TIMEOUT)
         return False
 
     def _cancel_batch(self) -> None:
@@ -744,13 +758,28 @@ class SheptWindow(Adw.ApplicationWindow):
         Marking the batch cancelled and stopping the child live in one place so
         closing the window mid-run cannot behave differently from pressing
         Cancel.
+
+        Nothing here waits: SIGTERM goes out at once and a separate thread owns
+        the escalation, so the main loop stays responsive and the status line
+        can actually paint "Cancelling…".
         """
         if not self.queue.is_running:
             return
         self._cancel.set()
         self.cancel_btn.set_sensitive(False)
         self.status.set_text("Cancelling…")
-        stop_process(self._proc)
+        proc = self._proc
+        if (
+            self._stopper is not None
+            and self._stopper.is_alive()
+            and self._stopper_proc is proc
+        ):
+            # A previous cancel is already escalating this child (Cancel was
+            # pressed and then the window closed): one waiter is enough.
+            return
+        if send_stop(proc):
+            self._stopper_proc = proc
+            self._stopper = stop_in_background(proc)
 
     def _idle(self, callback: Callable[..., bool], *args: object) -> None:
         """Queue a main-loop callback unless the window is closing.
@@ -1135,7 +1164,12 @@ class SheptWindow(Adw.ApplicationWindow):
         details: str | None = None
         cancelled = False
         try:
-            with tempfile.TemporaryDirectory(prefix="shept-") as tmp:
+            # `ignore_cleanup_errors` matters on close: the worker may still be
+            # writing when the interpreter goes down, and `TemporaryDirectory`
+            # removes the directory from its own finalizer at exit even then.
+            with tempfile.TemporaryDirectory(
+                prefix="shept-", ignore_cleanup_errors=True
+            ) as tmp:
                 wav_path = Path(tmp) / "input.wav"
                 self._decode(job, wav_path)
                 if self._cancel.is_set():
