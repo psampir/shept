@@ -95,6 +95,20 @@ python3 -m shept
 PyGObject is taken from the system and never from pip. The distribution sections
 below cover `whisper-cli` only, so skip them if you used the Flatpak bundle.
 
+### Updating
+
+A Flatpak bundle carries no remote, so `flatpak update` will never see a new
+version of Shept. Update by installing the newest bundle over the current one:
+
+```bash
+curl -LO https://github.com/psampir/shept/releases/latest/download/shept.flatpak
+flatpak install --user --reinstall shept.flatpak
+```
+
+Nothing is lost: settings, favourites and models downloaded inside the sandbox
+live in `~/.var/app/io.github.psampir.Shept`, and `--reinstall` leaves that
+directory alone. Do not add `--delete-data` here; it is the flag that removes it.
+
 ### Fedora
 
 The Fedora repositories ship only the whisper.cpp library, so use a COPR that
