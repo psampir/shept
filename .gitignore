@@ -9,3 +9,4 @@ build-dir/
 .flatpak-builder/
 repo/
 *.flatpak
+PLAN.local.md
