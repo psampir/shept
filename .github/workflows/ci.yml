@@ -113,12 +113,30 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v4
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      - name: Build the bundle
+        id: flatpak-build
+        continue-on-error: true
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: shept.flatpak
+          manifest-path: build-aux/io.github.psampir.Shept.yml
+          cache-key: flatpak-${{ hashFiles('build-aux/io.github.psampir.Shept.yml') }}
+      # whisper.cpp's build failed once with `undefined reference to
+      # matmul_id_subgroup_*` while generating its Vulkan shaders and passed on
+      # a plain re-run, so that failure is a race in the shader generator, not a
+      # manifest error. One retry covers it; a second failure still fails the
+      # job, so a real manifest problem cannot hide here. Kept inline instead of
+      # with a retry action so the job needs no third-party dependency.
+      - name: Build the bundle (retry)
+        id: flatpak-retry
+        if: steps.flatpak-build.outcome == 'failure'
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: shept.flatpak
           manifest-path: build-aux/io.github.psampir.Shept.yml
           cache-key: flatpak-${{ hashFiles('build-aux/io.github.psampir.Shept.yml') }}
       - name: Upload bundle
+        if: steps.flatpak-build.outcome == 'success' || steps.flatpak-retry.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: shept-flatpak
