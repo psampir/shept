@@ -1977,9 +1977,11 @@ class LanguagePicker(Adw.Window):
         )
         for language in results:
             action_row = self._make_row(language)
-            # Gtk.ListBox only emits row-activated for real Gtk.ListBoxRow
-            # children: an Adw.ActionRow appended directly is rendered but never
-            # treated as a row, so clicks did nothing and only Enter worked.
+            # Adw.ActionRow is itself a Gtk.ListBoxRow, but libadwaita marks it
+            # non-activatable, so appending one straight into a Gtk.ListBox
+            # renders it without ever emitting row-activated: clicks did
+            # nothing and only Enter worked. Wrapping it in a plain, activatable
+            # Gtk.ListBoxRow restores clicking and arrow key navigation.
             row = Gtk.ListBoxRow()
             row.set_child(action_row)
             row.set_activatable(True)

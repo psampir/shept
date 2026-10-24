@@ -10,11 +10,12 @@ and this project adheres to
 
 ### Fixed
 
-- The language picker reacts to a click again. Its rows were plain
-  `Adw.ActionRow` widgets appended to a `Gtk.ListBox`, and a list box only
-  emits `row-activated` for real `Gtk.ListBoxRow` children, so choosing a
-  language with the mouse did nothing while Enter still worked. Each row is
-  now wrapped in a `Gtk.ListBoxRow`, which also restores arrow key navigation.
+- The language picker reacts to a click again. `Adw.ActionRow` is itself a
+  `Gtk.ListBoxRow`, but libadwaita marks it non-activatable, so appending one
+  directly to a `Gtk.ListBox` renders it without ever emitting
+  `row-activated`: choosing a language with the mouse did nothing while Enter
+  still worked. Each row is now wrapped in a plain, activatable
+  `Gtk.ListBoxRow`, which also restores arrow key navigation.
 
 ## [0.1.1] - 2026-10-22
 
